@@ -3,7 +3,6 @@
 # pylint: disable=no-member
 # pylint: disable=not-an-iterable
 
-# taniyama push test
 
 import itertools
 import numpy as np
