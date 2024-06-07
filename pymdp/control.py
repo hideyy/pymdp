@@ -3,6 +3,8 @@
 # pylint: disable=no-member
 # pylint: disable=not-an-iterable
 
+# taniyama push test
+
 import itertools
 import numpy as np
 from pymdp.maths import softmax, softmax_obj_arr, spm_dot, spm_wnorm, spm_MDP_G, spm_log_single, kl_div, entropy
