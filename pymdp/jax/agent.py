@@ -467,3 +467,67 @@ class Agent(Module):
             raise NotImplementedError("CV is not implemented")
 
         return default_params
+    
+    @vmap
+    def infer_policies_efevisualize_full(self, qs: List):
+        """
+        Perform policy inference by optimizing a posterior (categorical) distribution over policies.
+        This distribution is computed as the softmax of ``G * gamma + lnE`` where ``G`` is the negative expected
+        free energy of policies, ``gamma`` is a policy precision and ``lnE`` is the (log) prior probability of policies.
+        This function returns the posterior over policies as well as the negative expected free energy of each policy.
+
+        Returns
+        ----------
+        q_pi: 1D ``numpy.ndarray``
+            Posterior beliefs over policies, i.e. a vector containing one posterior probability per policy.
+        G: 1D ``numpy.ndarray``
+            Negative expected free energies of each policy, i.e. a vector containing one negative expected free energy per policy.
+        """
+        
+        latest_belief = jtu.tree_map(lambda x: x[-1], qs) # only get the posterior belief held at the current timepoint
+        
+        q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB = control.update_posterior_policies_inductive_efev_full(
+            self.policies,
+            latest_belief, 
+            self.A,
+            self.B,
+            self.C,
+            self.E,
+            self.pA,
+            self.pB,
+            A_dependencies=self.A_dependencies,
+            B_dependencies=self.B_dependencies,
+            I = self.I,
+            gamma=self.gamma,
+            inductive_epsilon=self.inductive_epsilon,
+            use_utility=self.use_utility,
+            use_states_info_gain=self.use_states_info_gain,
+            use_param_info_gain=self.use_param_info_gain,
+            use_inductive=self.use_inductive
+        )
+        
+        return q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB
+    
+    @vmap
+    def sample_action_prob_pi(self, q_pi: Array, rng_key=None):
+        """
+        Sample or select a discrete action from the posterior over control states.
+        
+        Returns
+        ----------
+        action: 1D ``jax.numpy.ndarray``
+            Vector containing the indices of the actions for each control factor
+        action_probs: 2D ``jax.numpy.ndarray``
+            Array of action probabilities
+        """
+
+        if (rng_key is None) and (self.action_selection == "stochastic"):
+            raise ValueError("Please provide a random number generator key to sample actions stochastically")
+
+        if self.sampling_mode == "marginal":
+            action = control.sample_action(q_pi, self.policies, self.num_controls, self.action_selection, self.alpha, rng_key=rng_key)
+            prob_pi = None #仮置き
+        elif self.sampling_mode == "full":
+            action, prob_pi = control.sample_policy_prob_pi(q_pi, self.policies, self.num_controls, self.action_selection, self.alpha, rng_key=rng_key)
+
+        return action, prob_pi
