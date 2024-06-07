@@ -636,8 +636,8 @@ def sample_policy_prob_pi(q_pi, policies, num_controls, action_selection="determ
         p_policies = None
     elif action_selection == "stochastic":
         #p_policies = nn.softmax(log_stable(q_pi) * alpha)
-        p_policies = log_stable(q_pi) * alpha
-        policy_idx = jr.categorical(rng_key, p_policies)
+        log_p_policies = log_stable(q_pi) * alpha
+        policy_idx = jr.categorical(rng_key, log_p_policies)
         p_policies = nn.softmax(log_stable(q_pi) * alpha)
 
     selected_multiaction = policies[policy_idx, 0]
