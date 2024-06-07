@@ -13,6 +13,7 @@ from jax import lax, jit, vmap, nn
 from jax import random as jr
 from itertools import chain
 from jaxtyping import Array
+import time
 
 from pymdp.jax.maths import *
 # import pymdp.jax.utils as utils
