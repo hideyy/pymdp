@@ -449,7 +449,7 @@ def mirror_gradient_descent_step_err(tau, ln_A, lnB_past, lnB_future, ln_qs):
     return err
 
 def run_mmp_vfe(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=1, tau=1.):
-    qs, err, vfe = update_marginals_vfe(
+    qs, err, vfe, bs, un = update_marginals_vfe(
         get_mmp_messages, 
         obs, 
         A, 
@@ -460,7 +460,7 @@ def run_mmp_vfe(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=1, ta
         num_iter=num_iter, 
         tau=tau
     )
-    return qs, err, vfe
+    return qs, err, vfe, bs, un
 
 def update_marginals_vfe(get_messages, obs, A, B, prior, A_dependencies, B_dependencies, num_iter=1, tau=1.,):
     """" Version of marginal update that uses a sparse dependency matrix for A """
@@ -487,7 +487,7 @@ def update_marginals_vfe(get_messages, obs, A, B, prior, A_dependencies, B_depen
     qs = jtu.tree_map(nn.softmax, ln_qs)
 
     def scan_fn(carry, iter):
-        qs, err, vfe= carry
+        qs, err, vfe, bs, un= carry
 
         ln_qs = jtu.tree_map(log_stable, qs)
         # messages from future $m_+(s_t)$ and past $m_-(s_t)$ for all time steps and factors. For t = T we have that $m_+(s_T) = 0$
@@ -504,14 +504,16 @@ def update_marginals_vfe(get_messages, obs, A, B, prior, A_dependencies, B_depen
         #output = jtu.tree_map(mgds_v, ln_As, lnB_past, lnB_future, ln_qs)
         output = jtu.tree_map(mgds_v, ln_As, lnB_past, lnB_future, ln_qs)
         
-        qs, err, vfe = zip(*output)
+        qs, err, vfe , bs, un= zip(*output)
 
-        return (list(qs), list(err), list(vfe)), None
+        return (list(qs), list(err), list(vfe), list(bs), list(un)), None
     err=qs
     vfe=qs
-    output, _ = lax.scan(scan_fn, (qs, err, vfe), jnp.arange(num_iter))
-    qs, err, vfe =output
-    return qs, err, vfe
+    bs=qs
+    un=qs
+    output, _ = lax.scan(scan_fn, (qs, err, vfe, bs, un), jnp.arange(num_iter))
+    qs, err, vfe ,bs ,un=output
+    return qs, err, vfe, bs, un
 
 def mirror_gradient_descent_step_vfe(tau, ln_A, lnB_past, lnB_future, ln_qs):
     """
@@ -519,10 +521,22 @@ def mirror_gradient_descent_step_vfe(tau, ln_A, lnB_past, lnB_future, ln_qs):
     p_k = softmax(u_k)
     """
     err = ln_A - ln_qs + lnB_past + lnB_future
+    bs_temp=lnB_past + lnB_future - ln_qs
+    un_temp=ln_A
     ln_qs = ln_qs + tau * err
     qs = nn.softmax(ln_qs - ln_qs.mean(axis=-1, keepdims=True))
     #vfe=qs*err
-    bs=lnB_past + lnB_future - ln_qs
-    un=ln_A
+    
+    bs=-1*jnp.multiply(qs, bs_temp)
+    un=-1*jnp.multiply(qs, un_temp)
     vfe = -1*jnp.multiply(qs, err)
-    return qs, err, vfe
+    """ err = ln_A - ln_qs + lnB_past + lnB_future
+    ln_qs_new = ln_qs + tau * err
+    qs = nn.softmax(ln_qs_new - ln_qs_new.mean(axis=-1, keepdims=True))
+    
+    bs_temp = lnB_past + lnB_future - ln_qs
+    un_temp = ln_A
+    bs = -1 * jnp.multiply(qs, bs_temp)
+    un = -1 * jnp.multiply(qs, un_temp)
+    vfe = -1 * jnp.multiply(qs, err) """
+    return qs, err, vfe, bs, un
