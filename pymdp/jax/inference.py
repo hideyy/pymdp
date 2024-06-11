@@ -5,6 +5,7 @@
 import jax.numpy as jnp
 from .algos import run_factorized_fpi, run_mmp, run_vmp, run_mmp_vfe, run_mmp_err
 from jax import tree_util as jtu
+from jax.scipy.special import xlogy
 
 def update_posterior_states(
         A, 
@@ -155,4 +156,15 @@ def update_posterior_states_vfe(
             qs_hist = qs
     
     return qs_hist, err, vfe, bs, un
+
+def calc_KLD(past_beliefs,current_qs):
     
+    def compute_KLD_for_factor(past_beliefs_f, current_qs_f, f):
+        H_past_beliefs = xlogy(past_beliefs_f,past_beliefs_f).sum()
+        #H_past_beliefs = xlogy(current_qs_f,current_qs_f).sum()
+        past_beliefs_lncurrent_qs = xlogy(past_beliefs_f, current_qs_f).sum()
+        
+        return H_past_beliefs-past_beliefs_lncurrent_qs
+    #
+    kld_for_factor = jtu.tree_map(compute_KLD_for_factor, past_beliefs, current_qs, list(range(len(past_beliefs)))) #- past_beliefs_lncurrent_qs
+    return jtu.tree_reduce(lambda x,y: x+y, kld_for_factor)

@@ -17,6 +17,7 @@ from equinox import Module, field, tree_at
 from typing import List, Optional
 from jaxtyping import Array
 from functools import partial
+from jax.scipy.special import xlogy
 
 class Agent(Module):
     """ 
@@ -629,3 +630,44 @@ class Agent(Module):
         )
 
         return output, err, vfe, bs, un
+
+    @vmap
+    def calc_KLD_past_currentqs(self, empirical_prior, past_qs, current_qs):
+        """
+        認識によって減少する自由エネルギーを計算．mmpを想定．
+        t:現在のタイムステップ
+        empirical_prior:t-1におけるtの状態に対する予測,t-1におけるupdate_empirical_priorの出力pred
+        past_qs:t-1におけるt-1までの状態に関する信念,t-1におけるupdate_empirical_priorの出力qs
+        current_qs:tにおけるtまでの状態に関する信念,tにおけるinfer_statesの出力qs_hist
+        D_KL([past_qs, prior]|current_qs)を計算．
+        """
+        #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate([x, y[None, ...]], axis=1), past_qs, empirical_prior)
+        #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate([x, y], axis=1), past_qs, empirical_prior)
+        #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate([x, y[:, None, :]], axis=1), past_qs, empirical_prior)
+        past_beliefs = empirical_prior
+        if past_qs is not None:
+            #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate([x, y], axis=1), past_qs, jnp.expand_dims(empirical_prior, axis=1))
+
+            #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate([x, y[None, ...]], axis=1), past_qs, empirical_prior)
+            
+            #past_beliefs = jnp.concatenate((past_qs, empirical_prior), axis=1)
+            #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate([x, y], axis=1), past_qs, empirical_prior)
+            #empirical_prior = jnp.array(empirical_prior)
+            empirical_prior = jtu.tree_map(lambda x: x[None, ...], empirical_prior) # 2次元配列を3次元配列に変換
+            past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate((x, y), axis=0), past_qs, empirical_prior)
+            #past_beliefs = jnp.concatenate((past_qs, empirical_prior), axis=1)
+
+
+        #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate([x, jnp.expand_dims(jnp.array(y), axis=1)], axis=1), past_qs, empirical_prior)
+        #past_beliefs = jtu.tree_map(lambda x: x.squeeze(axis=0), past_beliefs)
+        #past_beliefs = [jnp.array([x]) for x in past_qs] + [jnp.array([y]) for y in empirical_prior]
+        #past_beliefs = past_beliefs = [jnp.array([x]) for x in past_qs] + [jnp.array([y]) for y in empirical_prior]
+        #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate([x, y[None, ...]], axis=0), past_qs, empirical_prior)
+        #H_past_beliefs = xlogy(current_qs,current_qs).sum()
+        #H_past_beliefs = xlogy(past_beliefs,past_beliefs).sum()
+        #past_beliefs_lncurrent_qs = xlogy(past_beliefs, current_qs).sum()
+        #kld = H_past_beliefs #- past_beliefs_lncurrent_qs
+
+        #kld = inference.calc_KLD(past_beliefs,current_qs)
+        kld = inference.calc_KLD(past_beliefs,current_qs)
+        return kld
