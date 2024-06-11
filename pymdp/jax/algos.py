@@ -487,7 +487,7 @@ def update_marginals_vfe(get_messages, obs, A, B, prior, A_dependencies, B_depen
     qs = jtu.tree_map(nn.softmax, ln_qs)
 
     def scan_fn(carry, iter):
-        qs, err, vfe, bs, un= carry
+        qs, err, vfe, bs, un = carry
 
         ln_qs = jtu.tree_map(log_stable, qs)
         # messages from future $m_+(s_t)$ and past $m_-(s_t)$ for all time steps and factors. For t = T we have that $m_+(s_T) = 0$
@@ -500,15 +500,14 @@ def update_marginals_vfe(get_messages, obs, A, B, prior, A_dependencies, B_depen
 
         #qs = jtu.tree_map(mgds, ln_As, lnB_past, lnB_future, ln_qs)
 
-        mgds_vfe= jtu.Partial(mirror_gradient_descent_step_vfe, tau)
-        #output = jtu.tree_map(mgds_v, ln_As, lnB_past, lnB_future, ln_qs)
-        #output = jtu.tree_map(mgds_v, ln_As, lnB_past, lnB_future, ln_qs)
+        mgds_vfe = jtu.Partial(mirror_gradient_descent_step_vfe, tau)
         
-        #qs, err, vfe , bs, un= zip(*output)
-
-        qs, err, vfe, bs, un = jtu.tree_map(mgds_vfe, ln_As, lnB_past, lnB_future, ln_qs)
-        #return (list(qs), list(err), list(vfe), list(bs), list(un)), None
-        return (qs, err, vfe, bs, un), None
+        #qs, err, vfe, bs, un = jtu.tree_map(mgds_vfe, ln_As, lnB_past, lnB_future, ln_qs)
+        #return (qs, err, vfe, bs, un), None
+        
+        output = jtu.tree_map(mgds_vfe, ln_As, lnB_past, lnB_future, ln_qs)
+        qs, err, vfe , bs, un = zip(*output)
+        return (list(qs), list(err), list(vfe), list(bs), list(un)), None
     
     err = qs
     vfe = qs
