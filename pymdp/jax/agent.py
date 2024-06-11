@@ -533,6 +533,55 @@ class Agent(Module):
         return action, prob_pi
     
     @vmap
+    def infer_states_err(self, observations, past_actions, empirical_prior, qs_hist, mask=None):
+        """
+        Update approximate posterior over hidden states by solving variational inference problem, given an observation.
+
+        Parameters
+        ----------
+        observations: ``list`` or ``tuple`` of ints
+            The observation input. Each entry ``observation[m]`` stores one-hot vectors representing the observations for modality ``m``.
+        past_actions: ``list`` or ``tuple`` of ints
+            The action input. Each entry ``past_actions[f]`` stores indices (or one-hots?) representing the actions for control factor ``f``.
+        empirical_prior: ``list`` or ``tuple`` of ``jax.numpy.ndarray`` of dtype object
+            Empirical prior beliefs over hidden states. Depending on the inference algorithm chosen, the resulting ``empirical_prior`` variable may be a matrix (or list of matrices) 
+            of additional dimensions to encode extra conditioning variables like timepoint and policy.
+        Returns
+        ---------
+        qs: ``numpy.ndarray`` of dtype object
+            Posterior beliefs over hidden states. Depending on the inference algorithm chosen, the resulting ``qs`` variable will have additional sub-structure to reflect whether
+            beliefs are additionally conditioned on timepoint and policy.
+            For example, in case the ``self.inference_algo == 'MMP' `` indexing structure is policy->timepoint-->factor, so that 
+            ``qs[p_idx][t_idx][f_idx]`` refers to beliefs about marginal factor ``f_idx`` expected under policy ``p_idx`` 
+            at timepoint ``t_idx``.
+        """
+        if not self.onehot_obs:
+            o_vec = [nn.one_hot(o, self.num_obs[m]) for m, o in enumerate(observations)]
+        else:
+            o_vec = observations
+        
+        A = self.A
+        if mask is not None:
+            for i, m in enumerate(mask):
+                o_vec[i] = m * o_vec[i] + (1 - m) * jnp.ones_like(o_vec[i]) / self.num_obs[i]
+                A[i] = m * A[i] + (1 - m) * jnp.ones_like(A[i]) / self.num_obs[i]
+        
+        output,err = inference.update_posterior_states_err(
+            A,
+            self.B,
+            o_vec,
+            past_actions,
+            prior=empirical_prior,
+            qs_hist=qs_hist,
+            A_dependencies=self.A_dependencies,
+            B_dependencies=self.B_dependencies,
+            num_iter=self.num_iter,
+            method=self.inference_algo
+        )
+
+        return output, err
+    
+    @vmap
     def infer_states_vfe(self, observations, past_actions, empirical_prior, qs_hist, mask=None):
         """
         Update approximate posterior over hidden states by solving variational inference problem, given an observation.
@@ -566,7 +615,7 @@ class Agent(Module):
                 o_vec[i] = m * o_vec[i] + (1 - m) * jnp.ones_like(o_vec[i]) / self.num_obs[i]
                 A[i] = m * A[i] + (1 - m) * jnp.ones_like(A[i]) / self.num_obs[i]
         
-        output,err = inference.update_posterior_states_vfe(
+        output,err, vfe = inference.update_posterior_states_vfe(
             A,
             self.B,
             o_vec,
@@ -579,4 +628,4 @@ class Agent(Module):
             method=self.inference_algo
         )
 
-        return output, err
+        return output, err, vfe
