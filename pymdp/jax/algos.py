@@ -376,7 +376,7 @@ if __name__ == "__main__":
     # print(jit(grad(sum_prod))(log_prior))
 
 def run_mmp_err(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=1, tau=1.):
-    qs,err = update_marginals_err(
+    qs, err = update_marginals_err(
         get_mmp_messages, 
         obs, 
         A, 
@@ -387,7 +387,7 @@ def run_mmp_err(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=1, ta
         num_iter=num_iter, 
         tau=tau
     )
-    return qs,err
+    return qs, err
 
 def update_marginals_err(get_messages, obs, A, B, prior, A_dependencies, B_dependencies, num_iter=1, tau=1.,):
     """" Version of marginal update that uses a sparse dependency matrix for A """
@@ -427,13 +427,14 @@ def update_marginals_err(get_messages, obs, A, B, prior, A_dependencies, B_depen
 
         qs = jtu.tree_map(mgds, ln_As, lnB_past, lnB_future, ln_qs)
 
-        mgds_v= jtu.Partial(mirror_gradient_descent_step_err, tau)
-        err = jtu.tree_map(mgds_v, ln_As, lnB_past, lnB_future, ln_qs)
+        mgds_err= jtu.Partial(mirror_gradient_descent_step_err, tau)
+        err = jtu.tree_map(mgds_err, ln_As, lnB_past, lnB_future, ln_qs)
 
         return (qs, err), None
-    err=qs
+    
+    err = qs
     output, _ = lax.scan(scan_fn, (qs, err), jnp.arange(num_iter))
-    qs, err=output
+    qs, err = output
     return qs, err
 
 def mirror_gradient_descent_step_err(tau, ln_A, lnB_past, lnB_future, ln_qs):
@@ -442,10 +443,9 @@ def mirror_gradient_descent_step_err(tau, ln_A, lnB_past, lnB_future, ln_qs):
     p_k = softmax(u_k)
     """
     err = ln_A - ln_qs + lnB_past + lnB_future
-    ln_qs = ln_qs + tau * err
-    qs = nn.softmax(ln_qs - ln_qs.mean(axis=-1, keepdims=True))
-    vfe=(qs*err).sum(0)
-
+    #ln_qs = ln_qs + tau * err
+    #qs = nn.softmax(ln_qs - ln_qs.mean(axis=-1, keepdims=True))
+    
     return err
 
 def run_mmp_vfe(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=1, tau=1.):
@@ -500,19 +500,22 @@ def update_marginals_vfe(get_messages, obs, A, B, prior, A_dependencies, B_depen
 
         #qs = jtu.tree_map(mgds, ln_As, lnB_past, lnB_future, ln_qs)
 
-        mgds_v= jtu.Partial(mirror_gradient_descent_step_vfe, tau)
+        mgds_vfe= jtu.Partial(mirror_gradient_descent_step_vfe, tau)
         #output = jtu.tree_map(mgds_v, ln_As, lnB_past, lnB_future, ln_qs)
-        output = jtu.tree_map(mgds_v, ln_As, lnB_past, lnB_future, ln_qs)
+        #output = jtu.tree_map(mgds_v, ln_As, lnB_past, lnB_future, ln_qs)
         
-        qs, err, vfe , bs, un= zip(*output)
+        #qs, err, vfe , bs, un= zip(*output)
 
-        return (list(qs), list(err), list(vfe), list(bs), list(un)), None
-    err=qs
-    vfe=qs
-    bs=qs
-    un=qs
+        qs, err, vfe, bs, un = jtu.tree_map(mgds_vfe, ln_As, lnB_past, lnB_future, ln_qs)
+        #return (list(qs), list(err), list(vfe), list(bs), list(un)), None
+        return (qs, err, vfe, bs, un), None
+    
+    err = qs
+    vfe = qs
+    bs = qs
+    un = qs
     output, _ = lax.scan(scan_fn, (qs, err, vfe, bs, un), jnp.arange(num_iter))
-    qs, err, vfe ,bs ,un=output
+    qs, err, vfe ,bs ,un = output
     return qs, err, vfe, bs, un
 
 def mirror_gradient_descent_step_vfe(tau, ln_A, lnB_past, lnB_future, ln_qs):
@@ -521,22 +524,13 @@ def mirror_gradient_descent_step_vfe(tau, ln_A, lnB_past, lnB_future, ln_qs):
     p_k = softmax(u_k)
     """
     err = ln_A - ln_qs + lnB_past + lnB_future
-    bs_temp=lnB_past + lnB_future - ln_qs
-    un_temp=ln_A
+    bs_tmp = lnB_past + lnB_future - ln_qs
+    un_tmp = ln_A
     ln_qs = ln_qs + tau * err
     qs = nn.softmax(ln_qs - ln_qs.mean(axis=-1, keepdims=True))
-    #vfe=qs*err
     
-    bs=-1*jnp.multiply(qs, bs_temp)
-    un=-1*jnp.multiply(qs, un_temp)
-    vfe = -1*jnp.multiply(qs, err)
-    """ err = ln_A - ln_qs + lnB_past + lnB_future
-    ln_qs_new = ln_qs + tau * err
-    qs = nn.softmax(ln_qs_new - ln_qs_new.mean(axis=-1, keepdims=True))
+    bs = -1 * jnp.multiply(qs, bs_tmp)
+    un = -1 * jnp.multiply(qs, un_tmp)
+    vfe = -1 * jnp.multiply(qs, err)
     
-    bs_temp = lnB_past + lnB_future - ln_qs
-    un_temp = ln_A
-    bs = -1 * jnp.multiply(qs, bs_temp)
-    un = -1 * jnp.multiply(qs, un_temp)
-    vfe = -1 * jnp.multiply(qs, err) """
     return qs, err, vfe, bs, un
