@@ -141,7 +141,7 @@ def update_posterior_states_vfe(
         if method == 'vmp':
             qs = run_vmp(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter) 
         if method == 'mmp':
-            qs, err, vfe, bs, un = run_mmp_vfe(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter)
+            qs, err, vfe, kld, bs, un = run_mmp_vfe(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter)
     
     if qs_hist is not None:
         if method == 'fpi' or method == "ovf":
@@ -155,7 +155,7 @@ def update_posterior_states_vfe(
         else:
             qs_hist = qs
     
-    return qs_hist, err, vfe, bs, un
+    return qs_hist, err, vfe, kld, bs, un
 
 def calc_KLD(past_beliefs,current_qs):
     

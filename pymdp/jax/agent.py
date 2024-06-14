@@ -616,7 +616,7 @@ class Agent(Module):
                 o_vec[i] = m * o_vec[i] + (1 - m) * jnp.ones_like(o_vec[i]) / self.num_obs[i]
                 A[i] = m * A[i] + (1 - m) * jnp.ones_like(A[i]) / self.num_obs[i]
         
-        output, err, vfe, bs, un = inference.update_posterior_states_vfe(
+        output, err, vfe, kld, bs, un = inference.update_posterior_states_vfe(
             A,
             self.B,
             o_vec,
@@ -629,7 +629,7 @@ class Agent(Module):
             method=self.inference_algo
         )
 
-        return output, err, vfe, bs, un
+        return output, err, vfe, kld, bs, un
 
     @vmap
     def calc_KLD_past_currentqs(self, empirical_prior, past_qs, current_qs):
