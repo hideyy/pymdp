@@ -506,7 +506,7 @@ def update_marginals_vfe(get_messages, obs, A, B, prior, A_dependencies, B_depen
         #qs, err, vfe, bs, un = jtu.tree_map(mgds_vfe, ln_As, lnB_past, lnB_future, ln_qs)
         #return (qs, err, vfe, bs, un), None
         
-        output = jtu.tree_map(mgds_vfe, ln_As, lnB_past, lnB_future, ln_qs)
+        output = jtu.tree_map(mgds_vfe, ln_As, lnB_past, lnB_future, ln_qs, ln_prior)
         qs, err, vfe, kld, bs, un = zip(*output)
         return (list(qs), list(err), list(vfe), list(kld), list(bs), list(un)), None
     
@@ -536,16 +536,18 @@ def mirror_gradient_descent_step_vfe(tau, ln_A, lnB_past, lnB_future, ln_qs):
     
     return qs, err, vfe, bs, un
 
-def mirror_gradient_descent_step_vfe_kld(tau, ln_A, lnB_past, lnB_future, ln_qs):
+def mirror_gradient_descent_step_vfe_kld(tau, ln_A, lnB_past, lnB_future, ln_qs, ln_prior):
     """
     u_{k+1} = u_{k} - \nabla_p F_k
     p_k = softmax(u_k)
     """
     err = ln_A - ln_qs + lnB_past + lnB_future
-    kld_tmp = ln_qs - lnB_past - lnB_future
+    #kld_tmp = ln_qs - lnB_past - lnB_future
+    kld_tmp = ln_qs - ln_prior
     bs_tmp = lnB_past + lnB_future - ln_qs
     un_tmp = ln_A
-    prior = nn.softmax(lnB_past + lnB_future - (lnB_past + lnB_future).mean(axis=-1, keepdims=True))
+    #prior = nn.softmax(lnB_past + lnB_future - (lnB_past + lnB_future).mean(axis=-1, keepdims=True))
+    prior = nn.softmax(ln_prior - ln_prior.mean(axis=-1, keepdims=True))
     ln_qs = ln_qs + tau * err
     qs = nn.softmax(ln_qs - ln_qs.mean(axis=-1, keepdims=True))
     
