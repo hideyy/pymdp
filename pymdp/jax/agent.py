@@ -616,7 +616,7 @@ class Agent(Module):
                 o_vec[i] = m * o_vec[i] + (1 - m) * jnp.ones_like(o_vec[i]) / self.num_obs[i]
                 A[i] = m * A[i] + (1 - m) * jnp.ones_like(A[i]) / self.num_obs[i]
         
-        output, err, vfe,  bs, un = inference.update_posterior_states_vfe(
+        output, err, vfe, bs, un = inference.update_posterior_states_vfe(
             A,
             self.B,
             o_vec,

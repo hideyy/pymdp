@@ -487,6 +487,7 @@ def update_marginals_vfe(get_messages, obs, A, B, prior, A_dependencies, B_depen
     qs = jtu.tree_map(nn.softmax, ln_qs)
 
     def scan_fn(carry, iter):
+        #qs, err, vfe, bs, un = carry
         qs, err, vfe, bs, un = carry
 
         ln_qs = jtu.tree_map(log_stable, qs)
@@ -501,21 +502,28 @@ def update_marginals_vfe(get_messages, obs, A, B, prior, A_dependencies, B_depen
         #qs = jtu.tree_map(mgds, ln_As, lnB_past, lnB_future, ln_qs)
 
         mgds_vfe = jtu.Partial(mirror_gradient_descent_step_vfe, tau)
+        #mgds_vfe = jtu.Partial(mirror_gradient_descent_step_vfe_kld, tau)
         
         #qs, err, vfe, bs, un = jtu.tree_map(mgds_vfe, ln_As, lnB_past, lnB_future, ln_qs)
         #return (qs, err, vfe, bs, un), None
         
         output = jtu.tree_map(mgds_vfe, ln_As, lnB_past, lnB_future, ln_qs)
+        #qs, err, vfe , bs, un = zip(*output)
         qs, err, vfe , bs, un = zip(*output)
         return (list(qs), list(err), list(vfe), list(bs), list(un)), None
+        #return (list(qs), list(err), list(vfe), list(kld), list(bs), list(un)), None
     
     err = qs
     vfe = qs
+    #kld = qs
     bs = qs
     un = qs
     output, _ = lax.scan(scan_fn, (qs, err, vfe, bs, un), jnp.arange(num_iter))
-    qs, err, vfe ,bs ,un = output
+    #output, _ = lax.scan(scan_fn, (qs, err, vfe, kld, bs, un), jnp.arange(num_iter))
+    qs, err, vfe, bs, un = output
+    #qs, err, vfe, kld, bs, un = output
     return qs, err, vfe, bs, un
+    #return qs, err, vfe, kld, bs, un
 
 def mirror_gradient_descent_step_vfe(tau, ln_A, lnB_past, lnB_future, ln_qs):
     """
@@ -533,3 +541,24 @@ def mirror_gradient_descent_step_vfe(tau, ln_A, lnB_past, lnB_future, ln_qs):
     vfe = -1 * jnp.multiply(qs, err)
     
     return qs, err, vfe, bs, un
+
+def mirror_gradient_descent_step_vfe_kld(tau, ln_A, lnB_past, lnB_future, ln_qs):
+    """
+    u_{k+1} = u_{k} - \nabla_p F_k
+    p_k = softmax(u_k)
+    """
+    err = ln_A - ln_qs + lnB_past + lnB_future
+    kld_tmp = -err
+    bs_tmp = lnB_past + lnB_future - ln_qs
+    un_tmp = ln_A
+    ln_prior = ln_qs
+    prior = nn.softmax(ln_prior - ln_prior.mean(axis=-1, keepdims=True))
+    ln_qs = ln_qs + tau * err
+    qs = nn.softmax(ln_qs - ln_qs.mean(axis=-1, keepdims=True))
+    
+    kld = -1 * jnp.multiply(prior, kld_tmp)
+    bs = -1 * jnp.multiply(qs, bs_tmp)
+    un = -1 * jnp.multiply(qs, un_tmp)
+    vfe = -1 * jnp.multiply(qs, err)
+    
+    return qs, err, vfe, kld, bs, un
