@@ -293,6 +293,16 @@ def get_mmp_messages(ln_B, B, qs, ln_prior, B_deps):
 
         return msg
     
+    #KLDを計算するためにforwardのメッセージを計算する。mmpにおけるforwardのメッセージとは異なる。
+    def forward_for_kld(b, ln_prior, f):
+        xs = get_deps_forw(qs, B_deps[f])
+        dims = tuple((0, 2 + i) for i in range(len(B_deps[f])))
+        msg = log_stable(factor_dot_flex(b, xs, dims, keep_dims=(0, 1) ))
+        # append log_prior as a first message 
+        msg = jnp.concatenate([jnp.expand_dims(ln_prior, 0), msg], axis=0)
+
+        return msg
+    
     def backward(Bs, xs):
         msg = 0.
         for i, b in enumerate(Bs):
@@ -320,13 +330,15 @@ def get_mmp_messages(ln_B, B, qs, ln_prior, B_deps):
     if B is not None:
         inv_B_deps = [[i for i, d in enumerate(B_deps) if f in d] for f in factors]
         B_marg = jtu.tree_map(lambda f: marg(inv_B_deps[f], f), factors)
-        lnB_future = jtu.tree_map(forward, B, ln_prior, factors) 
+        lnB_future = jtu.tree_map(forward, B, ln_prior, factors)
+        lnB_future_for_kld = jtu.tree_map(forward_for_kld, B, ln_prior, factors)
         lnB_past = jtu.tree_map(lambda f: backward(B_marg[f], get_deps_back(qs, inv_B_deps[f])), factors)
     else: 
         lnB_future = jtu.tree_map(lambda x: jnp.expand_dims(x, 0), ln_prior)
+        lnB_future_for_kld = jtu.tree_map(lambda x: jnp.expand_dims(x, 0), ln_prior)
         lnB_past = jtu.tree_map(lambda x: 0., qs)
 
-    return lnB_future, lnB_past
+    return lnB_future, lnB_past, lnB_future_for_kld
 
 def run_mmp(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=1, tau=1.):
     qs = update_marginals(
@@ -492,7 +504,7 @@ def update_marginals_vfe(get_messages, obs, A, B, prior, A_dependencies, B_depen
         ln_qs = jtu.tree_map(log_stable, qs)
         # messages from future $m_+(s_t)$ and past $m_-(s_t)$ for all time steps and factors. For t = T we have that $m_+(s_T) = 0$
         
-        lnB_past, lnB_future = get_messages(ln_B, B, qs, ln_prior, B_dependencies)
+        lnB_future, lnB_past, lnB_future_for_kld = get_messages(ln_B, B, qs, ln_prior, B_dependencies)
 
         #mgds = jtu.Partial(mirror_gradient_descent_step, tau)
 
@@ -506,7 +518,7 @@ def update_marginals_vfe(get_messages, obs, A, B, prior, A_dependencies, B_depen
         #qs, err, vfe, bs, un = jtu.tree_map(mgds_vfe, ln_As, lnB_past, lnB_future, ln_qs)
         #return (qs, err, vfe, bs, un), None
         
-        output = jtu.tree_map(mgds_vfe, ln_As, lnB_past, lnB_future, ln_qs, ln_prior)
+        output = jtu.tree_map(mgds_vfe, ln_As, lnB_future, lnB_past, ln_qs, lnB_future_for_kld)
         qs, err, vfe, kld, bs, un = zip(*output)
         return (list(qs), list(err), list(vfe), list(kld), list(bs), list(un)), None
     
@@ -536,18 +548,18 @@ def mirror_gradient_descent_step_vfe(tau, ln_A, lnB_past, lnB_future, ln_qs):
     
     return qs, err, vfe, bs, un
 
-def mirror_gradient_descent_step_vfe_kld(tau, ln_A, lnB_past, lnB_future, ln_qs, ln_prior):
+def mirror_gradient_descent_step_vfe_kld(tau, ln_A, lnB_future, lnB_past, ln_qs, lnB_future_for_kld):
     """
     u_{k+1} = u_{k} - \nabla_p F_k
     p_k = softmax(u_k)
     """
     err = ln_A - ln_qs + lnB_past + lnB_future
     #kld_tmp = ln_qs - lnB_past - lnB_future
-    kld_tmp = ln_qs - ln_prior
+    kld_tmp = ln_qs - lnB_future_for_kld
     bs_tmp = lnB_past + lnB_future - ln_qs
     un_tmp = ln_A
     #prior = nn.softmax(lnB_past + lnB_future - (lnB_past + lnB_future).mean(axis=-1, keepdims=True))
-    prior = nn.softmax(ln_prior - ln_prior.mean(axis=-1, keepdims=True))
+    prior = nn.softmax(lnB_future_for_kld - lnB_future_for_kld.mean(axis=-1, keepdims=True))
     ln_qs = ln_qs + tau * err
     qs = nn.softmax(ln_qs - ln_qs.mean(axis=-1, keepdims=True))
     
