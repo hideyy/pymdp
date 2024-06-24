@@ -91,7 +91,7 @@ def update_posterior_states_err(
         if method == 'vmp':
             qs = run_vmp(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter) 
         if method == 'mmp':
-            qs,err = run_mmp_err(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter)
+            qs, err = run_mmp_err(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter)
     
     if qs_hist is not None:
         if method == 'fpi' or method == "ovf":

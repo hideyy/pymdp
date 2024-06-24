@@ -8,7 +8,7 @@ from jax.tree_util import tree_map
 from jax import vmap
 import jax.numpy as jnp
 
-def update_obs_likelihood_dirichlet_m(pA_m, obs_m, qs, dependencies_m, lr=1.0):
+def update_obs_likelihood_dirichlet_m(pA_m, obs_m, qs, dependencies_m, lr=1.0, fr=1.0):
     """ JAX version of ``pymdp.learning.update_obs_likelihood_dirichlet_m`` """
     # pA_m - parameters of the dirichlet from the prior
     # pA_m.shape = (no_m x num_states[k] x num_states[j] x ... x num_states[n]) where (k, j, n) are indices of the hidden state factors that are parents of modality m
@@ -26,17 +26,18 @@ def update_obs_likelihood_dirichlet_m(pA_m, obs_m, qs, dependencies_m, lr=1.0):
 
     dfda = vmap(multidimensional_outer)([obs_m] + relevant_factors).sum(axis=0)
 
-    return pA_m + lr * dfda
+    #return pA_m + lr * dfda
+    return fr * pA_m + lr * dfda
     
-def update_obs_likelihood_dirichlet(pA, obs, qs, A_dependencies, lr=1.0):
+def update_obs_likelihood_dirichlet(pA, obs, qs, A_dependencies, lr=1.0, fr=1.0):
     """ JAX version of ``pymdp.learning.update_obs_likelihood_dirichlet`` """
 
-    update_A_fn = lambda pA_m, obs_m, dependencies_m: update_obs_likelihood_dirichlet_m(pA_m, obs_m, qs, dependencies_m, lr=lr)
+    update_A_fn = lambda pA_m, obs_m, dependencies_m: update_obs_likelihood_dirichlet_m(pA_m, obs_m, qs, dependencies_m, lr=lr, fr=fr)
     qA = tree_map(update_A_fn, pA, obs, A_dependencies)
 
     return qA
 
-def update_state_likelihood_dirichlet_f(pB_f, actions_f, current_qs, qs_seq, dependencies_f, lr=1.0):
+def update_state_likelihood_dirichlet_f(pB_f, actions_f, current_qs, qs_seq, dependencies_f, lr=1.0, fr=1.0):
     """ JAX version of ``pymdp.learning.update_state_likelihood_dirichlet_f`` """
     # pB_f - parameters of the dirichlet from the prior
     # pB_f.shape = (num_states[f] x num_states[f] x num_actions[f]) where f is the index of the hidden state factor
@@ -52,13 +53,14 @@ def update_state_likelihood_dirichlet_f(pB_f, actions_f, current_qs, qs_seq, dep
 
     past_qs = tree_map(lambda f_idx: qs_seq[f_idx][:-1], dependencies_f)
     dfdb = vmap(multidimensional_outer)([current_qs[1:]] + past_qs + [actions_f]).sum(axis=0)
-    qB_f = pB_f + lr * dfdb
+    #qB_f = pB_f + lr * dfdb
+    qB_f = fr * pB_f + lr * dfdb
 
     return qB_f
 
-def update_state_likelihood_dirichlet(pB, beliefs, actions_onehot, B_dependencies, lr=1.0):
+def update_state_likelihood_dirichlet(pB, beliefs, actions_onehot, B_dependencies, lr=1.0, fr=1.0):
 
-    update_B_f_fn = lambda pB_f, action_f, qs_f, dependencies_f: update_state_likelihood_dirichlet_f(pB_f, action_f, qs_f, beliefs, dependencies_f, lr=lr)    
+    update_B_f_fn = lambda pB_f, action_f, qs_f, dependencies_f: update_state_likelihood_dirichlet_f(pB_f, action_f, qs_f, beliefs, dependencies_f, lr=lr, fr=fr)    
     qB = tree_map(update_B_f_fn, pB, actions_onehot, beliefs, B_dependencies)
 
     return qB
