@@ -9,6 +9,8 @@ from jax.experimental.sparse._base import JAXSparse
 from jax.experimental import sparse
 from jaxtyping import Array, ArrayLike
 
+from jax.scipy.special import xlogy
+
 eps = jnp.finfo('float').eps
 
 def update_posterior_states(
@@ -163,5 +165,17 @@ def update_posterior_states_vfe(
             qs_hist = qs
     
     return qs_hist, err, vfe, kld, bs, un
+
+def calc_KLD(past_beliefs,current_qs):
+    
+    def compute_KLD_for_factor(past_beliefs_f, current_qs_f, f):
+        H_past_beliefs = xlogy(past_beliefs_f,past_beliefs_f).sum()
+        #H_past_beliefs = xlogy(current_qs_f,current_qs_f).sum()
+        past_beliefs_lncurrent_qs = xlogy(past_beliefs_f, current_qs_f).sum()
+        
+        return H_past_beliefs-past_beliefs_lncurrent_qs
+    #
+    kld_for_factor = jtu.tree_map(compute_KLD_for_factor, past_beliefs, current_qs, list(range(len(past_beliefs)))) #- past_beliefs_lncurrent_qs
+    return jtu.tree_reduce(lambda x,y: x+y, kld_for_factor)
 
     

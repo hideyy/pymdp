@@ -428,7 +428,7 @@ def update_marginals_vfe(get_messages, obs, A, B, prior, A_dependencies, B_depen
 
         output = jtu.tree_map(mgds_vfe, ln_As, lnB_past, lnB_future, ln_qs, lnB_future_for_kld)
         qs, err, vfe, kld, bs, un = zip(*output)
-        return (qs, err, vfe, kld, bs, un), None
+        return (list(qs), list(err), list(vfe), list(kld), list(bs), list(un)), None
     err = qs
     vfe = qs
     kld = qs
