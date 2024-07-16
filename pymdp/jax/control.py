@@ -517,24 +517,94 @@ def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_d
 
         qo = compute_expected_obs(qs_next, A, A_dependencies)
 
-        info_gain = compute_info_gain(qs_next, qo, A, A_dependencies) if use_states_info_gain else 0.
+        info_gain += compute_info_gain(qs_next, qo, A, A_dependencies) if use_states_info_gain else 0.
 
-        utility = compute_expected_utility(qo, C) if use_utility else 0.
+        predicted_KLD += compute_predicted_KLD(qs_next, qo, A, A_dependencies) 
+        #print("PFE")
+        predicted_F += compute_predicted_free_energy(qs_next, qo, A, A_dependencies) 
+        #print("Risk")
+        oRisk += compute_oRisk(t, qo, C)
+        #utility = compute_expected_utility(qo, C) if use_utility else 0.
 
         inductive_value = calc_inductive_value_t(qs_init, qs_next, I, epsilon=inductive_epsilon) if use_inductive else 0.
 
-        param_info_gain = 0.
+        param_info_gainA = 0.
+        param_info_gainB = 0.
         if pA is not None:
-            param_info_gain += calc_pA_info_gain(pA, qo, qs_next, A_dependencies) if use_param_info_gain else 0.
+            param_info_gainA -= calc_pA_info_gain(pA, qo, qs_next, A_dependencies) if use_param_info_gain else 0.
         if pB is not None:
-            param_info_gain += calc_pB_info_gain(pB, qs_next, qs, B_dependencies, policy_i[t]) if use_param_info_gain else 0.
+            param_info_gainB -= calc_pB_info_gain(pB, qs_next, qs, B_dependencies, policy_i[t]) if use_param_info_gain else 0.
 
-        neg_G += info_gain + utility - param_info_gain + inductive_value
-
-        return (qs_next, neg_G), None
+        neg_G = info_gain + predicted_KLD - predicted_F - oRisk + param_info_gainA + param_info_gainB
+        neg_G += inductive_value
+        return (qs_next, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB), None
 
     qs = qs_init
     neg_G = 0.
-    final_state, _ = lax.scan(scan_body, (qs, neg_G), jnp.arange(policy_i.shape[0]))
-    _, neg_G = final_state
-    return neg_G
+    info_gain = 0.
+    predicted_KLD = 0.
+    predicted_F = 0.
+    oRisk = 0.
+    param_info_gainA = 0.
+    param_info_gainB = 0.
+    final_state, _ = lax.scan(scan_body, (qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB), jnp.arange(policy_i.shape[0]))
+    _, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB = final_state
+    return neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB
+
+def compute_predicted_KLD(qs, qo, A, A_dependencies):
+    
+
+    def compute_pKLD_for_modality(qo_m, A_m, m):
+        H_qo = stable_entropy(qo_m)
+        deps = A_dependencies[m]
+        #relevant_factors = [qs[idx] for idx in deps]
+        relevant_factors = jnp.array([qs[idx] for idx in deps])
+        #print("qo_ln_A_m")
+        qs_ln_A_m = - stable_cross_entropy(relevant_factors,A_m)
+        #print("qo_qs_ln_A_m")
+        qo_qs_ln_A_m = -(qo_m * qs_ln_A_m).sum()
+        #qo_qs_ln_A_m = factor_dot(qs_ln_A_m, qo_m)
+        """ print("qo_ln_A_m")
+        qo_ln_A_m = - stable_cross_entropy(A_m,qo_m)
+        print("qo_qs_ln_A_m")
+        #qo_qs_ln_A_m = -(qo_m * qs_ln_A_m).sum()
+        qo_qs_ln_A_m = factor_dot(qo_ln_A_m, relevant_factors) """
+        #qo_qs_ln_A_m = factor_dot(H_A_m, relevant_factors)
+        return qo_qs_ln_A_m - H_qo
+    
+    pKLD_per_modality = jtu.tree_map(compute_pKLD_for_modality, qo, A, list(range(len(A))))
+        
+    return jtu.tree_reduce(lambda x,y: x+y, pKLD_per_modality)
+
+def compute_predicted_free_energy(qs, qo, A, A_dependencies):
+    
+
+    def compute_pF_for_modality(qo_m, A_m, m):
+        #H_qo = stable_entropy(qo_m)
+        deps = A_dependencies[m]
+        relevant_factors = jnp.array([qs[idx] for idx in deps])
+        
+        qs_ln_A_m = - stable_cross_entropy(relevant_factors,A_m)
+        
+        qo_qs_ln_A_m = -(qo_m * qs_ln_A_m).sum()
+        #qo_qs_ln_A_m = factor_dot(H_A_m, relevant_factors)
+        return qo_qs_ln_A_m #- H_qo
+    
+    pF_per_modality = jtu.tree_map(compute_pF_for_modality, qo, A, list(range(len(A))))
+        
+    return jtu.tree_reduce(lambda x,y: x+y, pF_per_modality)
+
+def compute_oRisk(t, qo, C):
+    def compute_expected_entropy_for_modality(qo_m):
+        H_qo = stable_entropy(qo_m)
+        return H_qo
+    oRisk = 0.
+    for o_m, C_m in zip(qo, C):
+        if C_m.ndim > 1:
+            oRisk += (o_m * C_m[t]).sum()
+        else:
+            oRisk += (o_m * C_m).sum()
+    Entropy_per_modality = jtu.tree_map(compute_expected_entropy_for_modality, qo)
+    H_qo_all=jtu.tree_reduce(lambda x,y: x+y, Entropy_per_modality)#-Σqolnqo
+    oRisk-=H_qo_all#Σqolnqo
+    return oRisk

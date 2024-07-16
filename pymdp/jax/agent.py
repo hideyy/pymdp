@@ -607,7 +607,7 @@ class Agent(Module):
 
         latest_belief = jtu.tree_map(lambda x: x[:, -1], qs) # only get the posterior belief held at the current timepoint
         infer_policies = partial(
-            control.update_posterior_policies_inductive,
+            control.update_posterior_policies_inductive_efe,
             self.policies,
             A_dependencies=self.A_dependencies,
             B_dependencies=self.B_dependencies,
@@ -617,7 +617,7 @@ class Agent(Module):
             use_inductive=self.use_inductive
         )
 
-        q_pi, G = vmap(infer_policies)(
+        q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB = vmap(infer_policies)(
             latest_belief, 
             self.A,
             self.B,
@@ -630,4 +630,4 @@ class Agent(Module):
             inductive_epsilon=self.inductive_epsilon
         )
 
-        return q_pi, G
+        return q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB
