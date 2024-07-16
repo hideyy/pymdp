@@ -543,6 +543,12 @@ class Agent(Module):
             prior=empirical_prior,
             qs_hist=qs_hist
         )
+        #vfe=vfe[0].sum(2)
+        vfe=jtu.tree_map(lambda x: x.sum(2),vfe)
+        err=jtu.tree_map(lambda x: x.sum(2),err)
+        kld=jtu.tree_map(lambda x: x.sum(2),kld)
+        bs=jtu.tree_map(lambda x: x.sum(2),bs)
+        un=jtu.tree_map(lambda x: x.sum(2),un)
 
         return output, err, vfe, kld, bs, un
     
