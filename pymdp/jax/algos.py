@@ -522,3 +522,151 @@ def get_mmp_messages_kld(ln_B, B, qs, ln_prior, B_deps):
         lnB_past = jtu.tree_map(lambda x: 0., qs)
 
     return lnB_future, lnB_past, lnB_future_for_kld
+
+def run_mmp_vfe_policies(A, B, policies, obs, prior, A_dependencies, B_dependencies, num_iter=1, tau=1.):
+    qs, err, vfe, kld, bs, un = update_marginals_vfe_policies(
+        get_mmp_messages_kld_policies, 
+        obs, 
+        A, 
+        B, 
+        prior, 
+        A_dependencies, 
+        B_dependencies, 
+        num_iter=num_iter, 
+        tau=tau
+    )
+    return qs, err, vfe, kld, bs, un
+
+def update_marginals_vfe_policies(get_messages, policies, obs, A, B, prior, A_dependencies, B_dependencies, num_iter=1, tau=1.,):
+    """" Version of marginal update that uses a sparse dependency matrix for A """
+
+    T = obs[0].shape[0]
+    ln_B = jtu.tree_map(log_stable, B)
+    # log likelihoods -> $\ln(A)$ for all time steps
+    # for $k > t$ we have $\ln(A) = 0$
+
+    def get_log_likelihood(obs_t, A):
+       # # mapping over batch dimension
+       # return vmap(compute_log_likelihood_per_modality)(obs_t, A)
+       return compute_log_likelihood_per_modality(obs_t, A)
+
+    # mapping over time dimension of obs array
+    log_likelihoods = vmap(get_log_likelihood, (0, None))(obs, A) # this gives a sequence of log-likelihoods (one for each `t`)
+
+    # log marginals -> $\ln(q(s_t))$ for all time steps and factors
+    ln_qs = jtu.tree_map( lambda p: jnp.broadcast_to(jnp.zeros_like(p), (T,) + p.shape), prior)
+
+    # log prior -> $\ln(p(s_t))$ for all factors
+    ln_prior = jtu.tree_map(log_stable, prior)
+
+    qs = jtu.tree_map(nn.softmax, ln_qs)
+
+    def scan_fn(carry, iter):
+        qs, err, vfe, kld, bs, un  = carry
+
+        ln_qs = jtu.tree_map(log_stable, qs)
+        # messages from future $m_+(s_t)$ and past $m_-(s_t)$ for all time steps and factors. For t = T we have that $m_+(s_T) = 0$
+        
+        lnB_future, lnB_past, lnB_future_for_kld = get_messages(ln_B, B, qs, ln_prior, B_dependencies)
+
+        #mgds = jtu.Partial(mirror_gradient_descent_step, tau)
+        mgds_vfe = jtu.Partial(mirror_gradient_descent_step_vfe_kld_policies, tau)
+
+        ln_As = vmap(all_marginal_log_likelihood, in_axes=(0, 0, None))(qs, log_likelihoods, A_dependencies)
+
+        output = jtu.tree_map(mgds_vfe, ln_As, lnB_past, lnB_future, ln_qs, lnB_future_for_kld)
+        qs, err, vfe, kld, bs, un = zip(*output)
+        return (list(qs), list(err), list(vfe), list(kld), list(bs), list(un)), None
+    err = qs
+    vfe = qs
+    kld = qs
+    bs = qs
+    un = qs
+    output, _ = lax.scan(scan_fn, (qs, err, vfe, kld, bs, un), jnp.arange(num_iter))
+    qs, err, vfe, kld, bs, un = output
+    return qs, err, vfe, kld, bs, un
+
+def mirror_gradient_descent_step_vfe_kld_policies(tau, ln_A, lnB_past, lnB_future, ln_qs, lnB_future_for_kld):
+    """
+    u_{k+1} = u_{k} - \nabla_p F_k
+    p_k = softmax(u_k)"""
+    err = ln_A - ln_qs + lnB_past + lnB_future
+    kld_tmp = ln_qs - lnB_future_for_kld
+    bs_tmp = lnB_past + lnB_future - ln_qs
+    un_tmp = ln_A
+    prior = nn.softmax(lnB_future_for_kld - lnB_future_for_kld.mean(axis=-1, keepdims=True))
+    ln_qs = ln_qs + tau * err
+    qs = nn.softmax(ln_qs - ln_qs.mean(axis=-1, keepdims=True))
+
+    kld = -1 * jnp.multiply(prior, kld_tmp)
+    bs = -1 * jnp.multiply(qs, bs_tmp)
+    un = -1 * jnp.multiply(qs, un_tmp)
+    vfe = -1 * jnp.multiply(qs, err)
+    return qs, err, vfe, kld, bs, un
+
+def get_mmp_messages_kld_policies(ln_B, B, qs, ln_prior, B_deps):
+    
+    num_factors = len(qs)
+    factors = list(range(num_factors))
+
+    get_deps_forw = lambda x, f_idx: [x[f][:-1] for f in f_idx]
+    get_deps_back = lambda x, f_idx: [x[f][1:] for f in f_idx]
+
+    def forward(b, ln_prior, f):
+        xs = get_deps_forw(qs, B_deps[f])
+        dims = tuple((0, 2 + i) for i in range(len(B_deps[f])))
+        msg = log_stable(factor_dot_flex(b, xs, dims, keep_dims=(0, 1) ))
+        # append log_prior as a first message 
+        msg = jnp.concatenate([jnp.expand_dims(ln_prior, 0), msg], axis=0)
+        # mutliply with 1/2 all but the last msg
+        T = len(msg)
+        if T > 1:
+            msg = msg * jnp.pad( 0.5 * jnp.ones(T - 1), (0, 1), constant_values=1.)[:, None]
+
+        return msg
+    #KLDを計算するためにforwardのメッセージを計算する。mmpにおけるforwardのメッセージとは異なる。
+    def forward_for_kld(b, ln_prior, f):
+        xs = get_deps_forw(qs, B_deps[f])
+        dims = tuple((0, 2 + i) for i in range(len(B_deps[f])))
+        msg = log_stable(factor_dot_flex(b, xs, dims, keep_dims=(0, 1) ))
+        # append log_prior as a first message 
+        msg = jnp.concatenate([jnp.expand_dims(ln_prior, 0), msg], axis=0)
+
+        return msg
+
+    def backward(Bs, xs):
+        msg = 0.
+        for i, b in enumerate(Bs):
+            b_norm = b / (b.sum(-1, keepdims=True) + 1e-16)
+            msg += log_stable(vmap(lambda x, y: y @ x)(b_norm, xs[i])) * .5
+        
+        return jnp.pad(msg, ((0, 1), (0, 0)))
+
+    def marg(inv_deps, f):
+        B_marg = []
+        for i in inv_deps:
+            b = B[i]
+            keep_dims = (0, 1, 2 + B_deps[i].index(f))
+            dims = []
+            idxs = []
+            for j, d in enumerate(B_deps[i]):
+                if f != d:
+                    dims.append((0, 2 + j))
+                    idxs.append(d)
+            xs = get_deps_forw(qs, idxs)
+            B_marg.append( factor_dot_flex(b, xs, tuple(dims), keep_dims=keep_dims) )
+        
+        return B_marg
+
+    if B is not None:
+        inv_B_deps = [[i for i, d in enumerate(B_deps) if f in d] for f in factors]
+        B_marg = jtu.tree_map(lambda f: marg(inv_B_deps[f], f), factors)
+        lnB_future = jtu.tree_map(forward, B, ln_prior, factors)
+        lnB_future_for_kld = jtu.tree_map(forward_for_kld, B, ln_prior, factors) 
+        lnB_past = jtu.tree_map(lambda f: backward(B_marg[f], get_deps_back(qs, inv_B_deps[f])), factors)
+    else: 
+        lnB_future = jtu.tree_map(lambda x: jnp.expand_dims(x, 0), ln_prior)
+        lnB_future_for_kld = jtu.tree_map(lambda x: jnp.expand_dims(x, 0), ln_prior)
+        lnB_past = jtu.tree_map(lambda x: 0., qs)
+
+    return lnB_future, lnB_past, lnB_future_for_kld
