@@ -671,10 +671,42 @@ class Agent(Module):
                 o_vec[i] = m * o_vec[i] + (1 - m) * jnp.ones_like(o_vec[i]) / self.num_obs[i]
                 A[i] = m * A[i] + (1 - m) * jnp.ones_like(A[i]) / self.num_obs[i]
 
+        
         policies = self.policies
         batch_size = 1 # number of agents
         policies = jtu.tree_map(lambda x: jnp.broadcast_to(x, (batch_size,) + x.shape), policies)
-        #print(policies)
+        _,K, t,_= policies.shape
+        #print(t)
+        #print(past_actions.shape)
+        selected_policy=-1
+        if past_actions is not None:
+            #print(past_actions.shape)
+            if past_actions.shape[1]>=t:
+                 #for i in range(K):
+                    #print(past_actions[:,-t:])
+                #print(past_actions[:,-t:][0])
+                #print(policies[0][0])
+                    #if jnp.array_equal(past_actions[:,-t:][0], policies[0][i]):
+                        #selected_policy=i 
+                selected_policy = jnp.where(
+                    jnp.all(past_actions[:, -t:][0] == policies[0], axis=(1, 2)),
+                    jnp.arange(K),
+                    -1
+                ).max()
+                #print(selected_policy)
+            else:
+                selected_policy=-1
+        else:
+            selected_policy=-1
+        """ print('selected_policy')
+        print(selected_policy) """
+    
+        #policies = jtu.tree_map(lambda x: jnp.broadcast_to(x, (batch_size,) + x.shape), policies)
+        #print(len(policies))
+        #print(policies[0].shape)
+        """ if past_actions is not None:
+            print(len(past_actions))
+            print(past_actions[0].shape) """
 
         infer_states_policies = partial(
             inference.update_posterior_states_vfe_policies,
@@ -693,18 +725,29 @@ class Agent(Module):
             prior=empirical_prior,
             qs_hist=qs_hist
         )
-        #vfe=vfe[0].sum(2)
+        """ if selected_policy !=-1:
+            #output=jnp.array(output[0][selected_policyi])
+            #output = jtu.tree_map(lambda x: jnp.broadcast_to(x, (batch_size,) + x.shape), output)
+            #print(output) 
+            output = jtu.tree_map(lambda x: x[0][selected_policy], output)
+            output = output[0] """
+        #print(output)
+        output = jnp.where(selected_policy != -1, jnp.array(jtu.tree_map(
+            lambda x: x[0][selected_policy],output)[0]), jnp.array(output))
+        output=list(output)
+        #print(output)
+            #output=jtu.tree_map(lambda x: jnp.expand_dims(x, -1).astype(jnp.float32), output) #vfe=vfe[0].sum(2)
         """ vfe=jtu.tree_map(lambda x: x.sum(2),vfe)
         err=jtu.tree_map(lambda x: x.sum(2),err)
         kld=jtu.tree_map(lambda x: x.sum(2),kld)
         bs=jtu.tree_map(lambda x: x.sum(2),bs)
         un=jtu.tree_map(lambda x: x.sum(2),un)
- """
-        vfe=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(2),x),vfe)
-        err=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(2),x),err)
+        """
+        #vfe=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(2),x),vfe)
+        """ err=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(2),x),err)
         kld=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(2),x),kld)
         bs=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(2),x),bs)
-        un=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(2),x),un),
+        un=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(2),x),un) """
        
 
         return output, err, vfe, kld, bs, un

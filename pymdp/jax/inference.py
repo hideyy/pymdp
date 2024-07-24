@@ -116,7 +116,7 @@ def smoothing_ovf(filtered_post, B, past_actions):
         marginals_and_joints[1].append(joints)
 
     return marginals_and_joints
-
+#import numpy as np
 def update_posterior_states_vfe(
         A, 
         B, 
@@ -193,6 +193,17 @@ def update_posterior_states_vfe_policies(
         method='fpi'
     ):
 
+    """     def find_matching_index(realaction_tree, policies_tree):
+        realaction_tree = jtu.tree_map(lambda x: jnp.broadcast_to(x, (1,) + x.shape), realaction_tree)
+        print(realaction_tree[0][0])
+        print(policies_tree[0][0])
+        for i in range(len(policies_tree)):
+        if jnp.array_equal(realaction_tree[0][0], policies_tree[i][0]):
+                return i
+            if jnp.all(jnp.equal(realaction_tree[0][0], policies_tree[i][0])):
+                return i
+        return None  # 一致するインデックスが見つからなかった場合 """
+
     if method == 'fpi' or method == "ovf":
         # format obs to select only last observation
         curr_obs = jtu.tree_map(lambda x: x[-1], obs)
@@ -211,19 +222,99 @@ def update_posterior_states_vfe_policies(
             B = None """
 
         if past_actions is not None and policies is not None:
-            K, t, _ = policies.shape
-            actions_tree = jtu.tree_map(lambda x: [x[0:-t, :] for _ in range(K)], actions_tree)
-            actions_tree = jtu.tree_map(lambda x: [jnp.concatenate([x[i], policies[i]], axis=0) for i in range(K)], actions_tree)
-            """ t = policies.shape[0]
-            actions_tree = jtu.tree_map(lambda x: x[0:-t, :], actions_tree)
-            actions_tree = jtu.tree_map(lambda x, y: jnp.concatenate([x, y], axis=0), actions_tree, policies) """
-            
-            # move time steps to the leading axis (leftmost)
-            # this assumes that a policy is always specified as the rightmost axis of Bs
-            #B = jtu.tree_map(lambda b, a_idx: jnp.moveaxis(b[..., a_idx], -1, 0), B, actions_tree)
+            K, t, _= policies.shape
+            if past_actions.shape[0]>=t:
+                #print(K)
+                #print(t)
+                nf = len(B)
+                #print(nf)#1,factor_number
+                #print('actions_tree')
+                actions_tree = [past_actions[:, i] for i in range(nf)]
+                #print('actions_tree2')
+                #actions_tree = jtu.tree_map(lambda x: [x[0:-t, :] for _ in range(K)], actions_tree)
+                
+                #actions_tree = jtu.tree_map(lambda x: [x[0:-t] for _ in range(K)], actions_tree)
+                #realaction_tree=jtu.tree_map(lambda x: x[-t:] , actions_tree)##
+                actions_tree = jtu.tree_map(lambda x: x[0:-t] , actions_tree)##
+                
+                #print(actions_tree)
+                #print(len(actions_tree))
+                #print(actions_tree[0].shape)
+                #print(policies[0].shape)
+                #print('actions_tree3')
+                #actions_tree = jtu.tree_map(lambda x: jnp.concatenate([actions_tree, x], axis=0),  policies)
+                
+                actions_tree = jnp.asarray(actions_tree) # Convert to ndarray##
+                #print(actions_tree[0].shape)
+                policies_tree=[jnp.asarray([policies[k][:, i] for i in range(nf)]) for k in range(K)]
+                #print(policies_tree[0][0].shape)
+                actions_tree = [jnp.concatenate([actions_tree, policies_tree[k]], axis=1) for k in range(K)]
+                #print(realaction_tree[0])
+                #print(policies_tree[0][0])
+                #print(policies[0])
+                #print(policies_tree[2])
+                #matching_indices = find_matching_index(realaction_tree, policies_tree)
 
-            B = [jtu.tree_map(lambda b, a_idx: jnp.moveaxis(b[..., a_idx], -1, 0), B, actions_tree[k]) for k in range(K)]
-            #B = jtu.tree_map(lambda b: [jnp.moveaxis(b[..., a_idx], -1, 0) for a_idx in actions_tree], B)
+                
+                #actions_tree = [jnp.concatenate([actions_tree, policies[k][:][i]], axis=0) for k in range(K)]##
+                
+                #actions_tree = jtu.tree_map(lambda x: x[0:-t].reshape(-1), actions_tree)
+                #actions_tree = jnp.asarray(actions_tree).flatten()
+                #actions_tree = [jnp.concatenate([actions_tree, policies[k]], axis=0) for k in range(K)]
+                #print(len(actions_tree))
+                #print(actions_tree[0].shape)
+                #actions_tree = [jtu.tree_map(lambda x: jnp.concatenate([x[0:-t], policies[k]], axis=0), actions_tree) for k in range(K)]
+                #actions_tree = jtu.tree_map(lambda x: [jnp.concatenate([x[i], policies[i]], axis=0) for i in range(K)], actions_tree)
+                #print('actions_tree_complete')
+                """ t = policies.shape[0]
+                actions_tree = jtu.tree_map(lambda x: x[0:-t, :], actions_tree)
+                actions_tree = jtu.tree_map(lambda x, y: jnp.concatenate([x, y], axis=0), actions_tree, policies) """
+                
+                # move time steps to the leading axis (leftmost)
+                # this assumes that a policy is always specified as the rightmost axis of Bs
+                #B = jtu.tree_map(lambda b, a_idx: jnp.moveaxis(b[..., a_idx], -1, 0), B, actions_tree)
+                #B = jtu.tree_map(lambda b: [jnp.moveaxis(b[..., a_idx], -1, 0) for a_idx in actions_tree], B)
+                #B = [jtu.tree_map(lambda b, a_idx: jnp.moveaxis(b[..., a_idx], -1, 0), B, actions_tree[k]) for k in range(K)]
+
+                B_list = []
+                for k in range(K):
+                    actions_tree_k = list(actions_tree[k])
+                    #print(actions_tree_k[0].shape)
+                    #print(f"actions_tree_k: {actions_tree_k}")
+                    B_k = jtu.tree_map(lambda b, a_idx: jnp.moveaxis(b[..., a_idx], -1, 0), B, actions_tree_k)
+                    #print('B_k_complete')
+                    B_list.append(B_k)
+                B = B_list
+                B_list = []
+                """ for k in range(K):
+                    # Flatten each sub-array and reshape to match dimensions with policies[k]
+                    actions_tree = jtu.tree_map(lambda x: x[0:-t].reshape(-1), actions_tree)
+                    actions_tree = jnp.asarray(actions_tree).reshape(-1, 1, 1)  # Adjusted to match expected dimensions
+                    
+                    # Reshape policies[k] to match the dimensions of actions_tree
+                    policies_k_reshaped = policies[k].reshape(policies[k].shape[0], policies[k].shape[1], 1)
+                    
+                    # Concatenate along the first axis
+                    actions_tree_k = jnp.concatenate([actions_tree, policies_k_reshaped], axis=0)
+                    print(len(actions_tree_k))
+                    print(actions_tree_k[0].shape)
+                    
+                    print(f"actions_tree_k: {actions_tree_k}")
+                    B_k = jtu.tree_map(lambda b, a_idx: jnp.moveaxis(b[..., a_idx], -1, 0), B, actions_tree_k)
+                    print('B_k_complete')
+                    B_list.append(B_k)
+                B = B_list """
+                #print('Bdefine_complete')
+            else:
+                nf = len(B)
+                actions_tree = [past_actions[:, i] for i in range(nf)]
+                #print(len(actions_tree))
+                #print(actions_tree[0].shape)
+                # move time steps to the leading axis (leftmost)
+                # this assumes that a policy is always specified as the rightmost axis of Bs
+                #print(f"actions_tree_k: {actions_tree}")
+                B = jtu.tree_map(lambda b, a_idx: jnp.moveaxis(b[..., a_idx], -1, 0), B, actions_tree)
+                #B = jtu.tree_map(lambda b: [jnp.moveaxis(b[..., a_idx], -1, 0) for a_idx in actions_tree], B)
         else:
             B = None
 
@@ -236,28 +327,56 @@ def update_posterior_states_vfe_policies(
             # Use vmap to parallelize the function over the batch dimension
             if B is not None:
             #qs, err, vfe, kld, bs, un = vmap(run_mmp_vfe_single)(jnp.array(B))
-
-                results = [run_mmp_vfe_single(b) for b in B]
-                qs, err, vfe, kld, bs, un = zip(*results)
-                qs = jnp.array(qs)
-                err = jnp.array(err)
-                vfe = jnp.array(vfe)
-                kld = jnp.array(kld)
-                bs = jnp.array(bs)
-                un = jnp.array(un)
+                if past_actions.shape[0]>=t:
+                    #print('run_mmp_vfe_single')
+                    results = [run_mmp_vfe_single(b) for b in B]
+                    qs, err, vfe, kld, bs, un = zip(*results)
+                    #print(selected_policy)
+                    #realqs=qs[selected_policy[0]]
+                    #print(len(qs))
+                    #print(qs[0][0].shape)
+                    vfe=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(1),x),vfe)
+                    kld=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(1),x),kld)
+                    bs=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(1),x),bs)
+                    un=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(1),x),un)
+                    qs = list(qs)
+                    #print(qs)
+                    err = jnp.array(err)
+                    vfe = jnp.array(vfe)
+                    kld = jnp.array(kld)
+                    bs = jnp.array(bs)
+                    un = jnp.array(un)
+                    #qs = jtu.tree_map(lambda x: jnp.expand_dims(x, 0).astype(jnp.float32), qs)
+                    #qs = jtu.tree_map(lambda x: jnp.expand_dims(x, 0).astype(jnp.float32), qs)
+                    qs=qs[0]
+                else:
+                    qs, err, vfe, kld, bs, un = run_mmp_vfe(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter)
+                    vfe=jtu.tree_map(lambda y: y.sum(1),vfe)
+                    kld=jtu.tree_map(lambda y: y.sum(1),kld)
+                    bs=jtu.tree_map(lambda y: y.sum(1),bs)
+                    un=jtu.tree_map(lambda y: y.sum(1),un)
+                    #realqs=qs
             else:
+                
                 qs, err, vfe, kld, bs, un = run_mmp_vfe(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter)
+                vfe=jtu.tree_map(lambda y: y.sum(1),vfe)
+                kld=jtu.tree_map(lambda y: y.sum(1),kld)
+                bs=jtu.tree_map(lambda y: y.sum(1),bs)
+                un=jtu.tree_map(lambda y: y.sum(1),un)
+                #realqs=qs
     if qs_hist is not None:
         if method == 'fpi' or method == "ovf":
             qs_hist = jtu.tree_map(lambda x, y: jnp.concatenate([x, jnp.expand_dims(y, 0)], 0), qs_hist, qs)
         else:
             #TODO: return entire history of beliefs
-            qs_hist = qs
+            #qs_hist = realqs
+            qs_hist=qs
     else:
         if method == 'fpi' or method == "ovf":
             qs_hist = jtu.tree_map(lambda x: jnp.expand_dims(x, 0), qs)
         else:
-            qs_hist = qs
+            #qs_hist = realqs
+            qs_hist=qs
     
     return qs_hist, err, vfe, kld, bs, un
     
