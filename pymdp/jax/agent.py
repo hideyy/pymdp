@@ -767,3 +767,60 @@ class Agent(Module):
          else:
             q_pi=nn.softmax(self.gamma * neg_efe + log_stable(self.E))
          return q_pi
+    
+    def infer_policies_precision(self, neg_efe, vfe_pi, beta=1):
+        agent=self
+        def scan_fn(carry, iter):
+            q_pi, q_pi_0, gamma, Gerror, qb=carry
+            if vfe_pi[0].shape[0]==neg_efe[0].shape[0]:
+                #print("pi posterior")
+                vfe_pi2=jnp.sum(vfe_pi[0], axis=-1).flatten()
+                q_pi=nn.softmax(gamma * neg_efe + log_stable(self.E) - vfe_pi2)
+            else:
+                q_pi=nn.softmax(gamma * neg_efe + log_stable(self.E))
+            q_pi_0=nn.softmax(gamma * neg_efe + log_stable(self.E))
+            #print("Gerror@scan")
+            #print((q_pi - q_pi_0).flatten())
+            #print(neg_efe.flatten())
+            #Gerror=jnp.dot((q_pi - q_pi_0), neg_efe)
+            Gerror = jnp.broadcast_to(jnp.dot((q_pi - q_pi_0).flatten(), neg_efe.flatten()), (self.batch_size,))
+            #print(Gerror)
+            dFdg=qb-beta+Gerror
+            #print(dFdg)
+            qb=qb-dFdg/2
+            gamma=1/qb
+            return (q_pi, q_pi_0, gamma, Gerror, qb), None
+        gamma=self.gamma
+        q_pi=nn.softmax(gamma * neg_efe + log_stable(self.E))
+        q_pi_0=nn.softmax(gamma * neg_efe + log_stable(self.E))
+        #print("initialGerror")
+        Gerror=jnp.broadcast_to(jnp.dot((q_pi - q_pi_0).flatten(), neg_efe.flatten()), (self.batch_size,))
+        qb=jnp.broadcast_to(beta, (self.batch_size,))
+        #print("scan")
+        output, _ = lax.scan(scan_fn, (q_pi, q_pi_0, gamma, Gerror, qb), jnp.arange(self.num_iter))
+        q_pi, q_pi_0, gamma, Gerror, qb = output
+        #self.gamma=gamma
+        agent = tree_at(lambda x: x.gamma, agent, gamma)
+        return agent, q_pi, q_pi_0, gamma, Gerror
+        """ def scan_fn(carry, iter):
+            qs, err, vfe, kld, bs, un  = carry
+
+            ln_qs = jtu.tree_map(log_stable, qs)
+            # messages from future $m_+(s_t)$ and past $m_-(s_t)$ for all time steps and factors. For t = T we have that $m_+(s_T) = 0$
+            
+            lnB_future, lnB_past, lnB_future_for_kld = get_messages(ln_B, B, qs, ln_prior, B_dependencies)
+
+            #mgds = jtu.Partial(mirror_gradient_descent_step, tau)
+            mgds_vfe = jtu.Partial(mirror_gradient_descent_step_vfe_kld, tau)
+
+            ln_As = vmap(all_marginal_log_likelihood, in_axes=(0, 0, None))(qs, log_likelihoods, A_dependencies)
+
+            output = jtu.tree_map(mgds_vfe, ln_As, lnB_past, lnB_future, ln_qs, lnB_future_for_kld)
+            qs, err, vfe, kld, bs, un = zip(*output)
+            return (list(qs), list(err), list(vfe), list(kld), list(bs), list(un)), None
+        err = qs
+        vfe = qs
+        kld = qs
+        bs = qs
+        un = qs
+        output, _ = lax.scan(scan_fn, (qs, err, vfe, kld, bs, un), jnp.arange(num_iter)) """
