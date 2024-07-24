@@ -18,6 +18,8 @@ from typing import List, Optional
 from jaxtyping import Array
 from functools import partial
 
+from pymdp.jax.maths import *
+
 class Agent(Module):
     """ 
     The Agent class, the highest-level API that wraps together processes for action, perception, and learning under active inference.
@@ -751,3 +753,17 @@ class Agent(Module):
        
 
         return output, err, vfe, kld, bs, un
+    
+    def infer_policies_posterior(self, neg_efe, vfe_pi):
+         #print(vfe_pi[0].shape)
+         #print(neg_efe[0].shape)
+         #vfe_pi=jtu.tree_map(lambda x:jnp.sum(x, axis=-1).flatten(),vfe_pi)
+         #vfe_pi=jnp.sum(vfe_pi[0], axis=-1).flatten()
+         #print(vfe_pi.shape)
+         if vfe_pi[0].shape[0]==neg_efe[0].shape[0]:
+            #print("pi posterior")
+            vfe_pi=jnp.sum(vfe_pi[0], axis=-1).flatten()
+            q_pi=nn.softmax(self.gamma * neg_efe + log_stable(self.E) - vfe_pi)
+         else:
+            q_pi=nn.softmax(self.gamma * neg_efe + log_stable(self.E))
+         return q_pi

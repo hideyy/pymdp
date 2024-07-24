@@ -335,20 +335,36 @@ def update_posterior_states_vfe_policies(
                     #realqs=qs[selected_policy[0]]
                     #print(len(qs))
                     #print(qs[0][0].shape)
-                    vfe=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(1),x),vfe)
+                    """ vfe=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(1),x),vfe)
                     kld=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(1),x),kld)
                     bs=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(1),x),bs)
-                    un=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(1),x),un)
+                    un=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(1),x),un) """
+
+                    vfe=jtu.tree_map(lambda x: jnp.array(x),vfe)
+                    kld=jtu.tree_map(lambda x: jnp.array(x),kld)
+                    bs=jtu.tree_map(lambda x: jnp.array(x),bs)
+                    un=jtu.tree_map(lambda x: jnp.array(x),un)
+                    vfe=jtu.tree_map(lambda y: y.sum(1),vfe)
+                    kld=jtu.tree_map(lambda y: y.sum(1),kld)
+                    bs=jtu.tree_map(lambda y: y.sum(1),bs)
+                    un=jtu.tree_map(lambda y: y.sum(1),un)
+
                     qs = list(qs)
+                    err = list(err)
                     #print(qs)
-                    err = jnp.array(err)
+                    """ err = jnp.array(err)
                     vfe = jnp.array(vfe)
                     kld = jnp.array(kld)
                     bs = jnp.array(bs)
-                    un = jnp.array(un)
+                    un = jnp.array(un) """
                     #qs = jtu.tree_map(lambda x: jnp.expand_dims(x, 0).astype(jnp.float32), qs)
                     #qs = jtu.tree_map(lambda x: jnp.expand_dims(x, 0).astype(jnp.float32), qs)
                     qs=qs[0]
+                    err=err[0]
+                    """ vfe=vfe[0]
+                    bs=bs[0]
+                    kld=kld[0]
+                    un=un[0] """
                 else:
                     qs, err, vfe, kld, bs, un = run_mmp_vfe(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter)
                     vfe=jtu.tree_map(lambda y: y.sum(1),vfe)
@@ -377,6 +393,10 @@ def update_posterior_states_vfe_policies(
         else:
             #qs_hist = realqs
             qs_hist=qs
+    vfe = jnp.array(vfe)
+    kld = jnp.array(kld)
+    bs = jnp.array(bs)
+    un = jnp.array(un) 
     
     return qs_hist, err, vfe, kld, bs, un
     
