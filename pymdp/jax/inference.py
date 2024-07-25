@@ -36,7 +36,7 @@ def update_posterior_states(
         # TODO: past_actions can be None
         if past_actions is not None:
             nf = len(B)
-            actions_tree = [past_actions[:, i] for i in range(nf)]
+            actions_tree = [past_actions[:, i] for i in range(nf)]##t*state_factor
             
             # move time steps to the leading axis (leftmost)
             # this assumes that a policy is always specified as the rightmost axis of Bs
@@ -348,6 +348,15 @@ def update_posterior_states_vfe_policies(
                     kld=jtu.tree_map(lambda y: y.sum(1),kld)
                     bs=jtu.tree_map(lambda y: y.sum(1),bs)
                     un=jtu.tree_map(lambda y: y.sum(1),un)
+
+                    """ vfe=jtu.tree_map(lambda x: jnp.array(x[0]),vfe)
+                    kld=jtu.tree_map(lambda x: jnp.array(x[0]),kld)
+                    bs=jtu.tree_map(lambda x: jnp.array(x[0]),bs)
+                    un=jtu.tree_map(lambda x: jnp.array(x[0]),un)
+                    vfe=jtu.tree_map(lambda y: y.sum(1),vfe)
+                    kld=jtu.tree_map(lambda y: y.sum(1),kld)
+                    bs=jtu.tree_map(lambda y: y.sum(1),bs)
+                    un=jtu.tree_map(lambda y: y.sum(1),un) """
 
                     qs = list(qs)
                     err = list(err)

@@ -608,3 +608,14 @@ def compute_oRisk(t, qo, C):
     H_qo_all=jtu.tree_reduce(lambda x,y: x+y, Entropy_per_modality)#-Σqolnqo
     oRisk-=H_qo_all#Σqolnqo
     return oRisk
+
+def sample_policy_idx(policies, q_pi, action_selection="deterministic", alpha = 16.0, rng_key=None):
+
+    if action_selection == "deterministic":
+        policy_idx = jnp.argmax(q_pi)
+    elif action_selection == "stochastic":
+        log_p_policies = log_stable(q_pi) * alpha
+        policy_idx = jr.categorical(rng_key, log_p_policies)
+
+    selected_multiaction = policies[policy_idx, 0]
+    return selected_multiaction, policy_idx

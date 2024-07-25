@@ -802,6 +802,29 @@ class Agent(Module):
         #self.gamma=gamma
         agent = tree_at(lambda x: x.gamma, agent, gamma)
         return agent, q_pi, q_pi_0, gamma, Gerror
+    def sample_action_policy_idx(self, q_pi: Array, rng_key=None):
+        """
+        Sample or select a discrete action from the posterior over control states.
+        
+        Returns
+        ----------
+        action: 1D ``jax.numpy.ndarray``
+            Vector containing the indices of the actions for each control factor
+        action_probs: 2D ``jax.numpy.ndarray``
+            Array of action probabilities
+        """
+
+        if (rng_key is None) and (self.action_selection == "stochastic"):
+            raise ValueError("Please provide a random number generator key to sample actions stochastically")
+
+        if self.sampling_mode == "marginal":
+            sample_action = partial(control.sample_action, self.policies, self.num_controls, action_selection=self.action_selection)
+            action = vmap(sample_action)(q_pi, alpha=self.alpha, rng_key=rng_key)
+        elif self.sampling_mode == "full":
+            sample_policy = partial(control.sample_policy_idx, self.policies, action_selection=self.action_selection)
+            action, policy_idx = vmap(sample_policy)(q_pi, alpha=self.alpha, rng_key=rng_key)
+
+        return action, policy_idx
         """ def scan_fn(carry, iter):
             qs, err, vfe, kld, bs, un  = carry
 
