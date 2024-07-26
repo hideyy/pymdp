@@ -768,13 +768,21 @@ class Agent(Module):
             q_pi=nn.softmax(self.gamma * neg_efe + log_stable(self.E))
          return q_pi
     
-    def infer_policies_precision(self, neg_efe, vfe_pi, beta=1):
+    def infer_policies_precision(self, neg_efe, vfe_pi, beta=1, reflect_len=None):
         agent=self
+        if reflect_len is None:
+            reflect_len=self.policy_len
         def scan_fn(carry, iter):
             q_pi, q_pi_0, gamma, Gerror, qb=carry
             if vfe_pi[0].shape[0]==neg_efe[0].shape[0]:
                 #print("pi posterior")
-                vfe_pi2=jnp.sum(vfe_pi[0], axis=-1).flatten()
+                #print(vfe_pi[0][0,:,:])
+                #print(reflect_len)
+                #print(vfe_pi[0][:,:,-reflect_len:])
+                vfe_pi2=vfe_pi[0][:,:,-reflect_len:]
+                
+                vfe_pi2=jnp.sum(vfe_pi2, axis=-1).flatten()
+                #print(vfe_pi2)
                 q_pi=nn.softmax(gamma * neg_efe + log_stable(self.E) - vfe_pi2)
             else:
                 q_pi=nn.softmax(gamma * neg_efe + log_stable(self.E))
