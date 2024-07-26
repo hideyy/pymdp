@@ -754,19 +754,24 @@ class Agent(Module):
 
         return output, err, vfe, kld, bs, un
     
-    def infer_policies_posterior(self, neg_efe, vfe_pi):
+    def infer_policies_posterior(self, neg_efe, vfe_pi, reflect_len=None):
          #print(vfe_pi[0].shape)
          #print(neg_efe[0].shape)
          #vfe_pi=jtu.tree_map(lambda x:jnp.sum(x, axis=-1).flatten(),vfe_pi)
          #vfe_pi=jnp.sum(vfe_pi[0], axis=-1).flatten()
          #print(vfe_pi.shape)
-         if vfe_pi[0].shape[0]==neg_efe[0].shape[0]:
-            #print("pi posterior")
-            vfe_pi=jnp.sum(vfe_pi[0], axis=-1).flatten()
-            q_pi=nn.softmax(self.gamma * neg_efe + log_stable(self.E) - vfe_pi)
-         else:
+        #agent=self
+        if reflect_len is None:
+            reflect_len=self.policy_len
+        if vfe_pi[0].shape[0]==neg_efe[0].shape[0]:
+        #print("pi posterior")
+            vfe_pi2=vfe_pi[0][:,:,-reflect_len:]
+            vfe_pi2=jnp.sum(vfe_pi2, axis=-1).flatten()
+            #vfe_pi=jnp.sum(vfe_pi[0], axis=-1).flatten()
+            q_pi=nn.softmax(self.gamma * neg_efe + log_stable(self.E) - vfe_pi2)
+        else:
             q_pi=nn.softmax(self.gamma * neg_efe + log_stable(self.E))
-         return q_pi
+        return q_pi
     
     def infer_policies_precision(self, neg_efe, vfe_pi, beta=1, reflect_len=None):
         agent=self
