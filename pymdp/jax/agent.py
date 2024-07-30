@@ -678,9 +678,10 @@ class Agent(Module):
         batch_size = 1 # number of agents
         policies = jtu.tree_map(lambda x: jnp.broadcast_to(x, (batch_size,) + x.shape), policies)
         _,K, t,_= policies.shape
-        #print(t)
+        #print('t',t)
+        #print('K',K)
         #print(past_actions.shape)
-        selected_policy=-1
+        """ selected_policy=-1
         if past_actions is not None:
             #print(past_actions.shape)
             if past_actions.shape[1]>=t:
@@ -699,7 +700,7 @@ class Agent(Module):
             else:
                 selected_policy=-1
         else:
-            selected_policy=-1
+            selected_policy=-1 """
         """ print('selected_policy')
         print(selected_policy) """
     
@@ -734,10 +735,20 @@ class Agent(Module):
             output = jtu.tree_map(lambda x: x[0][selected_policy], output)
             output = output[0] """
         #print(output)
-        output = jnp.where(selected_policy != -1, jnp.array(jtu.tree_map(
-            lambda x: x[0][selected_policy],output)[0]), jnp.array(output))
-        output=list(output)
-        #print(output)
+        # output = jnp.where(selected_policy != -1, jnp.array(jtu.tree_map(
+        #    lambda x: x[0][selected_policy],output)[0]), jnp.array(output))
+
+        #output = jtu.tree_map(lambda x: x[0][:,:-t],output)[0]
+        #print(output[0].shape)
+        if past_actions is not None:
+            #print(output[0])
+            #print(len(output[0]))
+            output = jtu.tree_map(lambda x: x[:,:-t,:],output[0])#[k][?,F,t]
+            #output = jtu.tree_map(lambda y:jtu.tree_map(lambda x: x[0][:][:-t],y),output)#K,F,t
+            #output=output[0]
+            #print(output)
+        #
+        print(output)
             #output=jtu.tree_map(lambda x: jnp.expand_dims(x, -1).astype(jnp.float32), output) #vfe=vfe[0].sum(2)
         """ vfe=jtu.tree_map(lambda x: x.sum(2),vfe)
         err=jtu.tree_map(lambda x: x.sum(2),err)
