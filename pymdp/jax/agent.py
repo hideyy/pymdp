@@ -748,7 +748,7 @@ class Agent(Module):
             #output=output[0]
             #print(output)
         #
-        print(output)
+        #print(output)
             #output=jtu.tree_map(lambda x: jnp.expand_dims(x, -1).astype(jnp.float32), output) #vfe=vfe[0].sum(2)
         """ vfe=jtu.tree_map(lambda x: x.sum(2),vfe)
         err=jtu.tree_map(lambda x: x.sum(2),err)

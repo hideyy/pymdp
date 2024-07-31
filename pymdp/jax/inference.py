@@ -325,7 +325,7 @@ def update_posterior_states_vfe_policies(
         if method == 'vmp':
             qs = run_vmp(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter) 
         def run_mmp_vfe_single(b):
-            return run_mmp_vfe_policies(A, b, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter)
+            return run_mmp_vfe_policies(A, b, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter, policy_len=t)
         if method == 'mmp':
             # Use vmap to parallelize the function over the batch dimension
             if B is not None:

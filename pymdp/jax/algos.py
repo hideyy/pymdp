@@ -532,7 +532,7 @@ def get_mmp_messages_kld(ln_B, B, qs, ln_prior, B_deps):
 
     return lnB_future, lnB_past, lnB_future_for_kld
 
-def run_mmp_vfe_policies(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=1, tau=1.):
+def run_mmp_vfe_policies(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=1, tau=1., policy_len=1.):
     qs, err, vfe, kld, bs, un = update_marginals_vfe_policies(
         get_mmp_messages_kld_policies, 
         obs, 
@@ -542,13 +542,14 @@ def run_mmp_vfe_policies(A, B, obs, prior, A_dependencies, B_dependencies, num_i
         A_dependencies, 
         B_dependencies, 
         num_iter=num_iter, 
-        tau=tau
+        tau=tau,
+        policy_len=policy_len
     )
     return qs, err, vfe, kld, bs, un
 
-def update_marginals_vfe_policies(get_messages, obs, A, B, prior, A_dependencies, B_dependencies, num_iter=1, tau=1.,):
+def update_marginals_vfe_policies(get_messages, obs, A, B, prior, A_dependencies, B_dependencies, num_iter=1, tau=1., policy_len=1.,):
     """" Version of marginal update that uses a sparse dependency matrix for A """
-    policy_len=B[0].shape[0]-1
+    #policy_len=B[0].shape[0]-1
     #print('policylen',policy_len)
     T = obs[0].shape[0]+policy_len
     #print(T)
@@ -640,8 +641,8 @@ def get_mmp_messages_kld_policies(ln_B, B, qs, ln_prior, B_deps):
         #print(qs[0].shape)
         xs = get_deps_forw(qs, B_deps[f])
         dims = tuple((0, 2 + i) for i in range(len(B_deps[f])))
-        #print(b.shape)#(3, 20, 20)
-        #print(xs[0].shape)#(2, 20)
+        #print('b',b.shape)#(3, 20, 20)
+        #print('xs',xs[0].shape)#(2, 20)
         msg = log_stable(factor_dot_flex(b, xs, dims, keep_dims=(0, 1) ))
         # append log_prior as a first message 
         msg = jnp.concatenate([jnp.expand_dims(ln_prior, 0), msg], axis=0)
