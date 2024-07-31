@@ -745,7 +745,7 @@ def compute_G_policy_inductive_efe_qs_pi( A, B, C, pA, pB, A_dependencies, B_dep
 
         neg_G = info_gain + predicted_KLD - predicted_F - oRisk + param_info_gainA + param_info_gainB
         neg_G += inductive_value
-        return (qs_next, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB), None
+        return (jnp.array(qs_next), neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB), None
 
     qs = qs_init
     #print(qs)
