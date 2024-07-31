@@ -743,7 +743,8 @@ class Agent(Module):
         if past_actions is not None:
             #print(output[0])
             #print(len(output[0]))
-            output = jtu.tree_map(lambda x: x[:,:-t,:],output[0])#[k][?,F,t]
+            #output = jtu.tree_map(lambda x: x[:,:-t,:],output[0])#[k][?,F,t]##ポリシー０のqsを取り出す場合
+            output = jtu.tree_map(lambda y:jtu.tree_map(lambda x: x[:,:-t,:],y),output)
             #output = jtu.tree_map(lambda y:jtu.tree_map(lambda x: x[0][:][:-t],y),output)#K,F,t
             #output=output[0]
             #print(output)
@@ -1028,3 +1029,78 @@ class Agent(Module):
         )
 
         return q_pi, G, info
+    
+    def infer_policies_efe_qs_pi_sub(self, qs_pi: List):
+        """
+        Perform policy inference by optimizing a posterior (categorical) distribution over policies.
+        This distribution is computed as the softmax of ``G * gamma + lnE`` where ``G`` is the negative expected
+        free energy of policies, ``gamma`` is a policy precision and ``lnE`` is the (log) prior probability of policies.
+        This function returns the posterior over policies as well as the negative expected free energy of each policy.
+
+        Returns
+        ----------
+        q_pi: 1D ``numpy.ndarray``
+            Posterior beliefs over policies, i.e. a vector containing one posterior probability per policy.
+        G: 1D ``numpy.ndarray``
+            Negative expected free energies of each policy, i.e. a vector containing one negative expected free energy per policy.
+        """
+        #latest_belief = jtu.tree_map(lambda x: x[:, -1], qs) 
+        #jnp.where(len(qs_pi)==1,self.infer_policies_efe(qs_pi)
+        latest_belief = jtu.tree_map(lambda y:jtu.tree_map(lambda x: x[:, -1], y),qs_pi) # only get the posterior belief held at the current timepoint
+        infer_policies = partial(
+            control.update_posterior_policies_inductive_efe_qs_pi,
+            self.policies,
+            A_dependencies=self.A_dependencies,
+            B_dependencies=self.B_dependencies,
+            use_utility=self.use_utility,
+            use_states_info_gain=self.use_states_info_gain,
+            use_param_info_gain=self.use_param_info_gain,
+            use_inductive=self.use_inductive
+        )
+
+        q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB = vmap(infer_policies)(
+            latest_belief, 
+            self.A,
+            self.B,
+            self.C,
+            self.E,
+            self.pA,
+            self.pB,
+            I = self.I,
+            gamma=self.gamma,
+            inductive_epsilon=self.inductive_epsilon
+        )
+
+        return q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB
+
+    def infer_policies_efe_qs_pi(self, qs_pi: List):
+        """
+        Perform policy inference by optimizing a posterior (categorical) distribution over policies.
+        This distribution is computed as the softmax of ``G * gamma + lnE`` where ``G`` is the negative expected
+        free energy of policies, ``gamma`` is a policy precision and ``lnE`` is the (log) prior probability of policies.
+        This function returns the posterior over policies as well as the negative expected free energy of each policy.
+
+        Returns
+        ----------
+        q_pi: 1D ``numpy.ndarray``
+            Posterior beliefs over policies, i.e. a vector containing one posterior probability per policy.
+        G: 1D ``numpy.ndarray``
+            Negative expected free energies of each policy, i.e. a vector containing one negative expected free energy per policy.
+        """
+        #print(len(qs_pi))
+        #q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB=jnp.where(len(qs_pi)==1,jnp.array(self.infer_policies_efe(qs_pi)),
+                                                                 #jnp.array(self.infer_policies_efe_qs_pi_sub(qs_pi)))
+
+        if len(qs_pi)==1:
+            q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB=self.infer_policies_efe(qs_pi)
+        else:
+            q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB=self.infer_policies_efe_qs_pi_sub(qs_pi)
+        """ q_pi=list(q_pi)
+        G=list(G)
+        PBS=list(PBS)
+        PKLD=list(PKLD)
+        PFE=list(PFE)
+        oRisk=list(oRisk)
+        PBS_pA=list(PBS_pA)
+        PBS_pB=list(PBS_pB) """
+        return q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB
