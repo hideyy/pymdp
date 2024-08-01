@@ -511,7 +511,7 @@ def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_d
     def scan_body(carry, t):
 
         #qs, neg_G = carry
-        qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB = carry
+        qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,utility, inductive_value = carry
 
         qs_next = compute_expected_state(qs, B, policy_i[t], B_dependencies)
 
@@ -524,20 +524,24 @@ def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_d
         predicted_F += compute_predicted_free_energy(qs_next, qo, A, A_dependencies) 
         #print("Risk")
         oRisk += compute_oRisk(t, qo, C)
-        #utility = compute_expected_utility(qo, C) if use_utility else 0.
+        utility += compute_expected_utility(t, qo, C) if use_utility else 0.
 
-        inductive_value = calc_inductive_value_t(qs_init, qs_next, I, epsilon=inductive_epsilon) if use_inductive else 0.
+        inductive_value += calc_inductive_value_t(qs_init, qs_next, I, epsilon=inductive_epsilon) if use_inductive else 0.
 
-        param_info_gainA = 0.
-        param_info_gainB = 0.
         if pA is not None:
             param_info_gainA -= calc_pA_info_gain(pA, qo, qs_next, A_dependencies) if use_param_info_gain else 0.
+        else:
+            param_info_gainA = 0.
         if pB is not None:
             param_info_gainB -= calc_pB_info_gain(pB, qs_next, qs, B_dependencies, policy_i[t]) if use_param_info_gain else 0.
+        else:
+            param_info_gainB = 0.
 
-        neg_G = info_gain + predicted_KLD - predicted_F - oRisk + param_info_gainA + param_info_gainB
-        neg_G += inductive_value
-        return (qs_next, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB), None
+        #neg_G = info_gain + param_info_gainA + param_info_gainB + inductive_value + utility
+
+        neg_G = info_gain + predicted_KLD - predicted_F - oRisk + param_info_gainA + param_info_gainB + inductive_value
+        #neg_G += inductive_value 
+        return (qs_next, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value), None
 
     qs = qs_init
     #print(qs)
@@ -549,8 +553,10 @@ def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_d
     oRisk = 0.
     param_info_gainA = 0.
     param_info_gainB = 0.
-    final_state, _ = lax.scan(scan_body, (qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB), jnp.arange(policy_i.shape[0]))
-    _, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB = final_state
+    utility=0.
+    inductive_value=0.
+    final_state, _ = lax.scan(scan_body, (qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value), jnp.arange(policy_i.shape[0]))
+    _, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value = final_state
     return neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB
 
 def compute_predicted_KLD(qs, qo, A, A_dependencies):
@@ -603,12 +609,12 @@ def compute_oRisk(t, qo, C):
     oRisk = 0.
     for o_m, C_m in zip(qo, C):
         if C_m.ndim > 1:
-            oRisk += (o_m * C_m[t]).sum()
+            oRisk -= (o_m * C_m[t]).sum()
         else:
-            oRisk += (o_m * C_m).sum()
+            oRisk -= (o_m * C_m).sum()
     Entropy_per_modality = jtu.tree_map(compute_expected_entropy_for_modality, qo)
     H_qo_all=jtu.tree_reduce(lambda x,y: x+y, Entropy_per_modality)#-Σqolnqo
-    oRisk-=H_qo_all#Σqolnqo
+    oRisk-=H_qo_all#Σqolnqo##-=
     return oRisk
 
 def sample_policy_idx(policies, q_pi, action_selection="deterministic", alpha = 16.0, rng_key=None):
@@ -719,7 +725,7 @@ def compute_G_policy_inductive_efe_qs_pi( A, B, C, pA, pB, A_dependencies, B_dep
     def scan_body(carry, t):
 
         #qs, neg_G = carry
-        qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB = carry
+        qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,inductive_value = carry
 
         qs_next = compute_expected_state(qs, B, policy_i[t], B_dependencies)
 
@@ -732,20 +738,26 @@ def compute_G_policy_inductive_efe_qs_pi( A, B, C, pA, pB, A_dependencies, B_dep
         predicted_F += compute_predicted_free_energy(qs_next, qo, A, A_dependencies) 
         #print("Risk")
         oRisk += compute_oRisk(t, qo, C)
-        #utility = compute_expected_utility(qo, C) if use_utility else 0.
+        #utility = compute_expected_utility(t, qo, C) if use_utility else 0.
 
-        inductive_value = calc_inductive_value_t(qs_init, qs_next, I, epsilon=inductive_epsilon) if use_inductive else 0.
+        inductive_value += calc_inductive_value_t(qs_init, qs_next, I, epsilon=inductive_epsilon) if use_inductive else 0.
 
-        param_info_gainA = 0.
-        param_info_gainB = 0.
+        
+        
         if pA is not None:
             param_info_gainA -= calc_pA_info_gain(pA, qo, qs_next, A_dependencies) if use_param_info_gain else 0.
+        else:
+            param_info_gainA = 0.
         if pB is not None:
             param_info_gainB -= calc_pB_info_gain(pB, qs_next, qs, B_dependencies, policy_i[t]) if use_param_info_gain else 0.
+        else:
+            param_info_gainB = 0.
 
-        neg_G = info_gain + predicted_KLD - predicted_F - oRisk + param_info_gainA + param_info_gainB
-        neg_G += inductive_value
-        return (jnp.array(qs_next), neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB), None
+        #neg_G = info_gain - param_info_gainA - param_info_gainB + inductive_value
+
+        neg_G = info_gain + predicted_KLD - predicted_F - oRisk + param_info_gainA + param_info_gainB + inductive_value
+        #neg_G += inductive_value + utility 
+        return (jnp.array(qs_next), neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,inductive_value), None
 
     qs = qs_init
     #print(qs)
@@ -757,6 +769,7 @@ def compute_G_policy_inductive_efe_qs_pi( A, B, C, pA, pB, A_dependencies, B_dep
     oRisk = 0.
     param_info_gainA = 0.
     param_info_gainB = 0.
-    final_state, _ = lax.scan(scan_body, (qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB), jnp.arange(policy_i.shape[0]))
-    _, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB = final_state
+    inductive_value = 0.
+    final_state, _ = lax.scan(scan_body, (qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,inductive_value), jnp.arange(policy_i.shape[0]))
+    _, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, inductive_value = final_state
     return neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB
