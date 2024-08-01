@@ -785,20 +785,20 @@ class Agent(Module):
             q_pi=nn.softmax(self.gamma * neg_efe + log_stable(self.E))
         return q_pi
     
-    def infer_policies_precision(self, neg_efe, vfe_pi, beta=1, reflect_len=None):
+    def infer_policies_precision(self, neg_efe, vfe_pi, beta=1, policy_len=None):
         agent=self
-        if reflect_len is None:
-            reflect_len=self.policy_len
+        if policy_len is None:
+            policy_len=self.policy_len
         def scan_fn(carry, iter):
             q_pi, q_pi_0, gamma, Gerror, qb=carry
             if vfe_pi[0].shape[0]==neg_efe[0].shape[0]:
                 #print("pi posterior")
                 #print(vfe_pi[0][0,:,:])
                 #print(reflect_len)
-                #print(vfe_pi[0][:,:,-reflect_len:])
-                vfe_pi2=vfe_pi[0][:,:,-reflect_len:]
-                
-                vfe_pi2=jnp.sum(vfe_pi2, axis=-1).flatten()
+                #print(vfe_pi[0][:,:,-reflect_len-1])
+                vfe_pi2=vfe_pi[0][:,:,-policy_len-1]
+                vfe_pi2=vfe_pi2.flatten()
+                #vfe_pi2=jnp.sum(vfe_pi2, axis=-1).flatten()
                 #print(vfe_pi2)
                 q_pi=nn.softmax(gamma * neg_efe + log_stable(self.E) - vfe_pi2)
             else:
@@ -1104,3 +1104,46 @@ class Agent(Module):
         PBS_pA=list(PBS_pA)
         PBS_pB=list(PBS_pB) """
         return q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB
+    
+    def infer_policies_precision2(self, neg_efe, vfe_pi, beta=1, reflect_len=None):
+        agent=self
+        if reflect_len is None:
+            reflect_len=self.policy_len
+        def scan_fn(carry, iter):
+            q_pi, q_pi_0, gamma, Gerror, qb=carry
+            if vfe_pi[0].shape[0]==neg_efe[0].shape[0]:
+                #print("pi posterior")
+                #print(vfe_pi[0][0,:,:])
+                #print(reflect_len)
+                #print(vfe_pi[0][:,:,-reflect_len:])
+                vfe_pi2=vfe_pi[0][:,:,-reflect_len:]
+                
+                vfe_pi2=jnp.sum(vfe_pi2, axis=-1).flatten()
+                #print(vfe_pi2)
+                q_pi=nn.softmax(gamma * neg_efe + log_stable(self.E) - vfe_pi2)
+            else:
+                q_pi=nn.softmax(gamma * neg_efe + log_stable(self.E))
+            q_pi_0=nn.softmax(gamma * neg_efe + log_stable(self.E))
+            #print("Gerror@scan")
+            #print((q_pi - q_pi_0).flatten())
+            #print(neg_efe.flatten())
+            #Gerror=jnp.dot((q_pi - q_pi_0), neg_efe)
+            Gerror = jnp.broadcast_to(jnp.dot((q_pi - q_pi_0).flatten(), neg_efe.flatten()), (self.batch_size,))
+            #print(Gerror)
+            dFdg=qb-beta+Gerror
+            #print(dFdg)
+            qb=qb-dFdg/2
+            gamma=1/qb
+            return (q_pi, q_pi_0, gamma, Gerror, qb), None
+        gamma=self.gamma
+        q_pi=nn.softmax(gamma * neg_efe + log_stable(self.E))
+        q_pi_0=nn.softmax(gamma * neg_efe + log_stable(self.E))
+        #print("initialGerror")
+        Gerror=jnp.broadcast_to(jnp.dot((q_pi - q_pi_0).flatten(), neg_efe.flatten()), (self.batch_size,))
+        qb=jnp.broadcast_to(beta, (self.batch_size,))
+        #print("scan")
+        output, _ = lax.scan(scan_fn, (q_pi, q_pi_0, gamma, Gerror, qb), jnp.arange(self.num_iter))
+        q_pi, q_pi_0, gamma, Gerror, qb = output
+        #self.gamma=gamma
+        agent = tree_at(lambda x: x.gamma, agent, gamma)
+        return agent, q_pi, q_pi_0, gamma, Gerror
