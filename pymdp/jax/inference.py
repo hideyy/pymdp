@@ -12,6 +12,8 @@ from jaxtyping import Array, ArrayLike
 
 from jax.scipy.special import xlogy
 
+from functools import partial
+
 eps = jnp.finfo('float').eps
 
 def update_posterior_states(
@@ -324,7 +326,11 @@ def update_posterior_states_vfe_policies(
         # outputs of both VMP and MMP should be a list of hidden state factors, where each qs[f].shape = (T, batch_dim, num_states_f)
         if method == 'vmp':
             qs = run_vmp(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter) 
+        
         def run_mmp_vfe_single(b):
+            
+            b=list(b)
+            #print(b)
             return run_mmp_vfe_policies(A, b, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter, policy_len=t)
         if method == 'mmp':
             # Use vmap to parallelize the function over the batch dimension
@@ -332,25 +338,64 @@ def update_posterior_states_vfe_policies(
             #qs, err, vfe, kld, bs, un = vmap(run_mmp_vfe_single)(jnp.array(B))
                 #if past_actions.shape[0]>=t:
                     #print('run_mmp_vfe_single')
-                results = [run_mmp_vfe_single(b) for b in B]
-                qs, err, vfe, kld, bs, un = zip(*results)
-                #print(selected_policy)
+                """ run_mmp_policies=partial(
+                    run_mmp_vfe_policies,
+                    A,
+                    obs, 
+                    prior, 
+                    A_dependencies, 
+                    B_dependencies, 
+                    num_iter=num_iter, 
+                    policy_len=t
+                ) """
+                """ run_mmp_policies = partial(
+                    run_mmp_vfe_policies,
+                    A=A,
+                    obs=obs,
+                    prior=prior,
+                    A_dependencies=A_dependencies,
+                    B_dependencies=B_dependencies,
+                    num_iter=num_iter,
+                    policy_len=t
+                ) """
+
+
+                #results=vmap(run_mmp_policies)(B)
+
+                """ run_mmp_vfe_partial = partial(run_mmp_vfe_single)
+                B=jnp.array(B)
+                # ベクトル化
+                results = vmap(run_mmp_vfe_partial)(B) """
+                B=jnp.array(B)
+                #print(B.shape)
+                """ results = vmap(run_mmp_vfe_single,(0,))(B)
+                print(results)
+                qs, err, vfe, kld, bs, un = zip(*results) """
+                qs, err, vfe, kld, bs, un = vmap(run_mmp_vfe_single,(0,))(B)
+                #results = [run_mmp_vfe_single(b) for b in B]
+                qs=jnp.array(qs)
+                #print(qs.shape)
+                qs=jnp.moveaxis(qs, 0, 1)
+                #print(qs.shape)
                 #realqs=qs[selected_policy[0]]
-                #print(len(qs))
+                #print(len(vfe))
+                #print(vfe[0])
+                #print(vfe[0].shape)
                 #print(qs[0][0].shape)
                 """ vfe=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(1),x),vfe)
                 kld=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(1),x),kld)
                 bs=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(1),x),bs)
                 un=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(1),x),un) """
 
-                vfe=jtu.tree_map(lambda x: jnp.array(x),vfe)
+                """ vfe=jtu.tree_map(lambda x: jnp.array(x),vfe)
                 kld=jtu.tree_map(lambda x: jnp.array(x),kld)
                 bs=jtu.tree_map(lambda x: jnp.array(x),bs)
-                un=jtu.tree_map(lambda x: jnp.array(x),un)
-                vfe=jtu.tree_map(lambda y: y.sum(1),vfe)
-                kld=jtu.tree_map(lambda y: y.sum(1),kld)
-                bs=jtu.tree_map(lambda y: y.sum(1),bs)
-                un=jtu.tree_map(lambda y: y.sum(1),un)
+                un=jtu.tree_map(lambda x: jnp.array(x),un) """
+                vfe=jtu.tree_map(lambda y: y.sum(2),vfe)
+                kld=jtu.tree_map(lambda y: y.sum(2),kld)
+                bs=jtu.tree_map(lambda y: y.sum(2),bs)
+                un=jtu.tree_map(lambda y: y.sum(2),un)
+                #print(vfe)
 
                 """ vfe=jtu.tree_map(lambda x: jnp.array(x[0]),vfe)
                 kld=jtu.tree_map(lambda x: jnp.array(x[0]),kld)

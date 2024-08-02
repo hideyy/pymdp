@@ -740,11 +740,11 @@ class Agent(Module):
 
         #output = jtu.tree_map(lambda x: x[0][:,:-t],output)[0]
         #print(output[0].shape)
-        if past_actions is not None:
+        """ if past_actions is not None:
             #print(output[0])
             #print(len(output[0]))
             #output = jtu.tree_map(lambda x: x[:,:-t,:],output[0])#[k][?,F,t]##ポリシー０のqsを取り出す場合
-            output = jtu.tree_map(lambda y:jtu.tree_map(lambda x: x[:,:-t,:],y),output)
+            output = jtu.tree_map(lambda y:jtu.tree_map(lambda x: x[:,:-t,:],y),output) """
             #output = jtu.tree_map(lambda y:jtu.tree_map(lambda x: x[0][:][:-t],y),output)#K,F,t
             #output=output[0]
             #print(output)
@@ -791,9 +791,10 @@ class Agent(Module):
             policy_len=self.policy_len
         def scan_fn(carry, iter):
             q_pi, q_pi_0, gamma, Gerror, qb=carry
-            if vfe_pi[0].shape[0]==neg_efe[0].shape[0]:
+            #print(vfe_pi[0].shape)
+            if vfe_pi[0].shape[1]==neg_efe[0].shape[0]:
                 #print("pi posterior")
-                #print(vfe_pi[0][0,:,:])
+                #print(vfe_pi[0][:,:,:])
                 #print(reflect_len)
                 #print(vfe_pi[0][:,:,-reflect_len-1])
                 vfe_pi2=vfe_pi[0][:,:,-policy_len-1]
@@ -1045,8 +1046,13 @@ class Agent(Module):
             Negative expected free energies of each policy, i.e. a vector containing one negative expected free energy per policy.
         """
         #latest_belief = jtu.tree_map(lambda x: x[:, -1], qs) 
-        #jnp.where(len(qs_pi)==1,self.infer_policies_efe(qs_pi)
-        latest_belief = jtu.tree_map(lambda y:jtu.tree_map(lambda x: x[:, -1], y),qs_pi) # only get the posterior belief held at the current timepoint
+        policy_len=self.policy_len
+        #print(qs_pi[0].shape)
+        latest_belief = jtu.tree_map(lambda x: x[:, :,-1-policy_len,:],qs_pi)
+        #print(latest_belief[0].shape)
+        #latest_belief = jtu.tree_map(lambda y:jtu.tree_map(lambda x: x[:, -1-policy_len], y),qs_pi) # only get the posterior belief held at the current timepoint
+
+        #latest_belief = jtu.tree_map(lambda y:jtu.tree_map(lambda x: x[:, -1], y),qs_pi)
         infer_policies = partial(
             control.update_posterior_policies_inductive_efe_qs_pi,
             self.policies,
@@ -1087,7 +1093,7 @@ class Agent(Module):
         G: 1D ``numpy.ndarray``
             Negative expected free energies of each policy, i.e. a vector containing one negative expected free energy per policy.
         """
-        #print(len(qs_pi))
+        #print(qs_pi[0].shape)
         #q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB=jnp.where(len(qs_pi)==1,jnp.array(self.infer_policies_efe(qs_pi)),
                                                                  #jnp.array(self.infer_policies_efe_qs_pi_sub(qs_pi)))
 
