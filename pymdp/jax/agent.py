@@ -792,6 +792,7 @@ class Agent(Module):
         def scan_fn(carry, iter):
             q_pi, q_pi_0, gamma, Gerror, qb=carry
             #print(vfe_pi[0].shape)
+            #print(neg_efe[0])
             if vfe_pi[0].shape[1]==neg_efe[0].shape[0]:
                 #print("pi posterior")
                 #print(vfe_pi[0][:,:,:])
@@ -828,6 +829,8 @@ class Agent(Module):
         #self.gamma=gamma
         agent = tree_at(lambda x: x.gamma, agent, gamma)
         return agent, q_pi, q_pi_0, gamma, Gerror
+    
+
     def sample_action_policy_idx(self, q_pi: Array, rng_key=None):
         """
         Sample or select a discrete action from the posterior over control states.

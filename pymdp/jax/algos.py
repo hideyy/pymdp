@@ -551,7 +551,10 @@ def update_marginals_vfe_policies(get_messages, obs, A, B, prior, A_dependencies
     """" Version of marginal update that uses a sparse dependency matrix for A """
     #policy_len=B[0].shape[0]-1
     #print('policylen',policy_len)
-    T = obs[0].shape[0]+policy_len
+    if obs is not None:
+        T = obs[0].shape[0]+policy_len
+    else:
+        T = policy_len
     #print(T)
     #print(B[0].shape[0])
     #T=B[0].shape[0]

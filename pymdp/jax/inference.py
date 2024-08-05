@@ -320,6 +320,22 @@ def update_posterior_states_vfe_policies(
                 #print(f"actions_tree_k: {actions_tree}")
                 B = jtu.tree_map(lambda b, a_idx: jnp.moveaxis(b[..., a_idx], -1, 0), B, actions_tree)
                 #B = jtu.tree_map(lambda b: [jnp.moveaxis(b[..., a_idx], -1, 0) for a_idx in actions_tree], B) """
+        elif past_actions is None and policies is not None:
+            K, t, _= policies.shape
+            #if past_actions.shape[0]>=t:
+                #print(K)
+            #print(t)
+            nf = len(B)
+            policies_tree=[jnp.asarray([policies[k][:, i] for i in range(nf)]) for k in range(K)]
+            B_list = []
+            for k in range(K):
+                actions_tree_k = list(policies_tree[k])
+                #print(actions_tree_k[0].shape)
+                #print(f"actions_tree_k: {actions_tree_k}")
+                B_k = jtu.tree_map(lambda b, a_idx: jnp.moveaxis(b[..., a_idx], -1, 0), B, actions_tree_k)
+                #print('B_k_complete')
+                B_list.append(B_k)
+            B = B_list
         else:
             B = None
 
