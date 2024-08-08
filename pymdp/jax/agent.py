@@ -776,7 +776,7 @@ class Agent(Module):
         if reflect_len is None:
             reflect_len=self.policy_len
         if vfe_pi[0].shape[0]==neg_efe[0].shape[0]:
-        #print("pi posterior")
+            print("pi posterior")
             vfe_pi2=vfe_pi[0][:,:,-reflect_len:]
             vfe_pi2=jnp.sum(vfe_pi2, axis=-1).flatten()
             #vfe_pi=jnp.sum(vfe_pi[0], axis=-1).flatten()
@@ -937,18 +937,9 @@ class Agent(Module):
                 selected_policy=-1
         else:
             selected_policy=-1
-        """ print('selected_policy')
-        print(selected_policy) """
-    
-        #policies = jtu.tree_map(lambda x: jnp.broadcast_to(x, (batch_size,) + x.shape), policies)
-        #print(len(policies))
-        #print(policies[0].shape)
-        """ if past_actions is not None:
-            print(len(past_actions))
-            print(past_actions[0].shape) """
-
+        
         infer_states_policies = partial(
-            inference.update_posterior_states_vfe_policies,
+            inference.update_posterior_states_vfe_policies2,
             A_dependencies=self.A_dependencies,
             B_dependencies=self.B_dependencies,
             num_iter=self.num_iter,
@@ -964,17 +955,30 @@ class Agent(Module):
             prior=empirical_prior,
             qs_hist=qs_hist
         )
-        """ if selected_policy !=-1:
-            #output=jnp.array(output[0][selected_policyi])
-            #output = jtu.tree_map(lambda x: jnp.broadcast_to(x, (batch_size,) + x.shape), output)
-            #print(output) 
-            output = jtu.tree_map(lambda x: x[0][selected_policy], output)
-            output = output[0] """
+        
+        #print(len(output))
+        #print(output[0].shape)
+        #output = jnp.where(selected_policy != -1, jnp.array(jtu.tree_map(
+        #    lambda x: x[0][selected_policy],output)[0]), jnp.array(output))
+        #print(selected_policy)
+        #output = jnp.where(selected_policy != -1, jnp.array(output[selected_policy]), jnp.array(output))#selected_policy
+        """ if selected_policy != -1:
+            output=output[selected_policy] """
         #print(output)
-        output = jnp.where(selected_policy != -1, jnp.array(jtu.tree_map(
-            lambda x: x[0][selected_policy],output)[0]), jnp.array(output))
+        if past_actions is not None:
+            if past_actions.shape[1]>=t:
+                #output=output[selected_policy]
+                #print(jnp.array(output).shape)
+                policy_mask = jnp.all(past_actions[:, -t:][0] == policies[0], axis=(1, 2))
+                output = jnp.where(policy_mask[:, None, None, None, None], jnp.array(output), jnp.zeros_like(jnp.array(output)))
+                output = output.sum(axis=0, keepdims=True)
+                output = output.squeeze(axis=0)  # 不要な次元を削除
+                #print(output.shape)
+                #print(policy_mask)
+        #output = jnp.where(selected_policy != -1, jnp.array(jtu.tree_map(lambda x: x[0],output)[selected_policy]), jnp.array(output))
         output=list(output)
         #print(output)
+        #print(len(output))
             #output=jtu.tree_map(lambda x: jnp.expand_dims(x, -1).astype(jnp.float32), output) #vfe=vfe[0].sum(2)
         """ vfe=jtu.tree_map(lambda x: x.sum(2),vfe)
         err=jtu.tree_map(lambda x: x.sum(2),err)
@@ -1120,11 +1124,13 @@ class Agent(Module):
             reflect_len=self.policy_len
         def scan_fn(carry, iter):
             q_pi, q_pi_0, gamma, Gerror, qb=carry
-            if vfe_pi[0].shape[0]==neg_efe[0].shape[0]:
+            #print(vfe_pi[0].shape[0])
+            if vfe_pi[0].shape[1]==neg_efe[0].shape[0]:
                 #print("pi posterior")
                 #print(vfe_pi[0][0,:,:])
                 #print(reflect_len)
                 #print(vfe_pi[0][:,:,-reflect_len:])
+                
                 vfe_pi2=vfe_pi[0][:,:,-reflect_len:]
                 
                 vfe_pi2=jnp.sum(vfe_pi2, axis=-1).flatten()
