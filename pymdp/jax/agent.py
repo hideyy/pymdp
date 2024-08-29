@@ -1163,11 +1163,16 @@ class Agent(Module):
         agent = tree_at(lambda x: x.gamma, agent, gamma)
         return agent, q_pi, q_pi_0, gamma, Gerror
     
-    def calc_bayesian_model_averaging(self, qs_pi):
+    def calc_bayesian_model_averaging(self, qs_pi, q_pi):
         if len(qs_pi)>1:
             beliefs = jnp.array(qs_pi)
-            Bayesian_model_avaraging_full = jnp.mean(beliefs, axis=0)
-            Bayesian_model_avaraging_full = list(Bayesian_model_avaraging_full)
+            Bayesian_model_avaraging_full_old = list(jnp.mean(beliefs, axis=0))
+            #print(beliefs)
+            #print(q_pi)
+            Bayesian_model_avaraging_full=jnp.tensordot(q_pi, beliefs, axes=(1, 0))
+            Bayesian_model_avaraging_full = list(Bayesian_model_avaraging_full[0])
+            #print(Bayesian_model_avaraging_full_old)
+            #print(Bayesian_model_avaraging_full)
             K, t,_= self.policies.shape
             Bayesian_model_avaraging = jtu.tree_map( lambda x: x[:, :-t], Bayesian_model_avaraging_full)
         else:
