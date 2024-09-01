@@ -1178,3 +1178,37 @@ class Agent(Module):
         else:
             Bayesian_model_avaraging=qs_pi
         return Bayesian_model_avaraging
+    
+    def calc_KLD_past_currentqs_pi(self, past_qs_pi, current_qs_pi):
+        """
+        認識によって減少する自由エネルギーを計算．mmpを想定．
+        t:現在のタイムステップ
+        
+        past_beliefs:t-1におけるtまでの状態に関する信念
+        current_beliefs:tにおけるtまでの状態に関する信念
+        D_KL(past_beliefs|current_beliefs)を計算．
+        """
+        #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate([x, y[None, ...]], axis=1), past_qs, empirical_prior)
+        #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate([x, y], axis=1), past_qs, empirical_prior)
+        #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate([x, y[:, None, :]], axis=1), past_qs, empirical_prior)
+        K, t,_= self.policies.shape
+        
+            #print("combart")
+        #empirical_prior = jtu.tree_map(lambda x: x[None, ...], empirical_prior) # 2次元配列を3次元配列に変換
+            #print("combine")
+        #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate((x, y), axis=1), past_qs_pi, empirical_prior)
+            #past_beliefs = jnp.concatenate((past_qs, empirical_prior), axis=1)
+        #print(past_qs_pi[0])   
+        #print(current_qs_pi[0].shape)
+        if len(past_qs_pi[0].shape) ==2:
+            past_beliefs = past_qs_pi
+            #current_beliefs = current_qs_pi
+        else:
+            past_beliefs = past_qs_pi
+            past_beliefs = jtu.tree_map( lambda x: x[:,:-t+1], past_qs_pi)
+            #current_beliefs = jtu.tree_map( lambda x: x[0,:,:], current_qs_pi)
+        #jtu.tree_map( lambda x: x[:, 1:-t], current_qs_pi)
+        current_beliefs = current_qs_pi
+        
+        kld = inference.calc_KLD(past_beliefs, current_beliefs)
+        return kld

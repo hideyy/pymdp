@@ -172,9 +172,11 @@ def update_posterior_states_vfe(
 def calc_KLD(past_beliefs,current_qs):
     
     def compute_KLD_for_factor(past_beliefs_f, current_qs_f, f):
-        H_past_beliefs = xlogy(past_beliefs_f,past_beliefs_f).sum()
+        #print(past_beliefs_f.shape)
+        #print(current_qs_f.shape)
+        H_past_beliefs = xlogy(past_beliefs_f,past_beliefs_f).sum(-1)
         #H_past_beliefs = xlogy(current_qs_f,current_qs_f).sum()
-        past_beliefs_lncurrent_qs = xlogy(past_beliefs_f, current_qs_f).sum()
+        past_beliefs_lncurrent_qs = xlogy(past_beliefs_f, current_qs_f).sum(-1)
         
         return H_past_beliefs-past_beliefs_lncurrent_qs
     #
