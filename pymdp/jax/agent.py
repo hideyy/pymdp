@@ -1205,7 +1205,7 @@ class Agent(Module):
             #current_beliefs = current_qs_pi
         else:
             past_beliefs = past_qs_pi
-            past_beliefs = jtu.tree_map( lambda x: x[:,:-t+1], past_qs_pi)
+            past_beliefs = jtu.tree_map( lambda x: x[:,:-t], past_qs_pi)
             #current_beliefs = jtu.tree_map( lambda x: x[0,:,:], current_qs_pi)
         #jtu.tree_map( lambda x: x[:, 1:-t], current_qs_pi)
         current_beliefs = current_qs_pi
