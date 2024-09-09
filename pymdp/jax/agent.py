@@ -1225,3 +1225,139 @@ class Agent(Module):
         pred = vmap(propagate_beliefs)(qs_last, self.B, action)
         
         return pred
+    
+    def infer_states2(self, observations, empirical_prior, *, past_actions=None, qs_hist=None, mask=None):
+        """
+        Update approximate posterior over hidden states by solving variational inference problem, given an observation.
+
+        Parameters
+        ----------
+        observations: ``list`` or ``tuple`` of ints
+            The observation input. Each entry ``observation[m]`` stores one-hot vectors representing the observations for modality ``m``.
+        past_actions: ``list`` or ``tuple`` of ints
+            The action input. Each entry ``past_actions[f]`` stores indices (or one-hots?) representing the actions for control factor ``f``.
+        empirical_prior: ``list`` or ``tuple`` of ``jax.numpy.ndarray`` of dtype object
+            Empirical prior beliefs over hidden states. Depending on the inference algorithm chosen, the resulting ``empirical_prior`` variable may be a matrix (or list of matrices) 
+            of additional dimensions to encode extra conditioning variables like timepoint and policy.
+        Returns
+        ---------
+        qs: ``numpy.ndarray`` of dtype object
+            Posterior beliefs over hidden states. Depending on the inference algorithm chosen, the resulting ``qs`` variable will have additional sub-structure to reflect whether
+            beliefs are additionally conditioned on timepoint and policy.
+            For example, in case the ``self.inference_algo == 'MMP' `` indexing structure is policy->timepoint-->factor, so that 
+            ``qs[p_idx][t_idx][f_idx]`` refers to beliefs about marginal factor ``f_idx`` expected under policy ``p_idx`` 
+            at timepoint ``t_idx``.
+        """
+        if not self.onehot_obs:
+            o_vec = [nn.one_hot(o, self.num_obs[m]) for m, o in enumerate(observations)]
+        else:
+            o_vec = observations
+        
+        A = self.A
+        if mask is not None:
+            for i, m in enumerate(mask):
+                o_vec[i] = m * o_vec[i] + (1 - m) * jnp.ones_like(o_vec[i]) / self.num_obs[i]
+                A[i] = m * A[i] + (1 - m) * jnp.ones_like(A[i]) / self.num_obs[i]
+
+        infer_states = partial(
+            inference.update_posterior_states2,
+            A_dependencies=self.A_dependencies,
+            B_dependencies=self.B_dependencies,
+            num_iter=self.num_iter,
+            method=self.inference_algo
+        )
+        
+        #output = vmap(infer_states)(
+        output, err = vmap(infer_states)(
+            A,
+            self.B,
+            o_vec,
+            past_actions,
+            prior=empirical_prior,
+            qs_hist=qs_hist
+        )
+
+        #return output
+
+        # print(f'output : {output}')
+        # print(f'err : {err}')
+
+        output_last = jtu.tree_map( lambda x: x[:,-1], output)
+        errs_last = jtu.tree_map( lambda x: x[:,-1], err)
+        # print(f'output_last : {output_last}')
+        # print(f'errs_last : {errs_last}')
+        # print(f'output_last[0] : {output_last[0]}')
+        # print(f'errs_last[0] : {errs_last[0]}')
+        # print(f'output_last[0][0] : {output_last[0][0]}')
+        # print(f'errs_last[0][0] : {errs_last[0][0]}')
+
+        vfe = [-jnp.dot(output_last[0][0], errs_last[0][0])]
+
+        # print(f'output[0][0].shape[0] : {output[0][0].shape[0]}')
+        # vfes = []
+        # for i in range(output[0][0].shape[0]):
+        #     output_i = jtu.tree_map( lambda x: x[:,i], output)
+        #     errs_i = jtu.tree_map( lambda x: x[:,i], err)
+        #     vfes.append(-jnp.dot(output_i[0][0], errs_i[0][0]))
+
+        return output, vfe#, vfes
+    
+    def infer_parameters_epsilon(self, beliefs_A, outcomes, actions, beliefs_B=None, lr_pA=1., lr_pB=1., epsilon=1e-6,**kwargs):
+        agent = self
+        beliefs_B = beliefs_A if beliefs_B is None else beliefs_B
+        if self.inference_algo == 'ovf':
+            smoothed_marginals_and_joints = vmap(inference.smoothing_ovf)(beliefs_A, self.B, actions)
+            marginal_beliefs = smoothed_marginals_and_joints[0]
+            joint_beliefs = smoothed_marginals_and_joints[1]
+        else:
+            marginal_beliefs = beliefs_A
+            if self.learn_B:
+                nf = len(beliefs_B)
+                joint_fn = lambda f: [beliefs_B[f][:, 1:]] + [beliefs_B[f_idx][:, :-1] for f_idx in self.B_dependencies[f]]
+                joint_beliefs = jtu.tree_map(joint_fn, list(range(nf)))
+
+        if self.learn_A:
+            update_A = partial(
+                learning.update_obs_likelihood_dirichlet_epsilon,
+                A_dependencies=self.A_dependencies,
+                num_obs=self.num_obs,
+                onehot_obs=self.onehot_obs,
+            )
+            
+            lr = jnp.broadcast_to(lr_pA, (self.batch_size,))
+            eps = jnp.broadcast_to(epsilon, (self.batch_size,))
+            qA, E_qA = vmap(update_A)(
+                self.pA,
+                self.A,
+                outcomes,
+                marginal_beliefs,
+                lr=lr,
+                epsilon=eps
+            )
+            
+            agent = tree_at(lambda x: (x.A, x.pA), agent, (E_qA, qA))
+            
+        if self.learn_B:
+            assert beliefs_B[0].shape[1] == actions.shape[1] + 1
+            update_B = partial(
+                learning.update_state_transition_dirichlet,
+                num_controls=self.num_controls
+            )
+
+            lr = jnp.broadcast_to(lr_pB, (self.batch_size,))
+            qB, E_qB = vmap(update_B)(
+                self.pB,
+                joint_beliefs,
+                actions,
+                lr=lr
+            )
+            
+            # if you have updated your beliefs about transitions, you need to re-compute the I matrix used for inductive inferenece
+            if self.use_inductive and self.H is not None:
+                I_updated = vmap(control.generate_I_matrix)(self.H, E_qB, self.inductive_threshold, self.inductive_depth)
+            else:
+                I_updated = self.I
+
+            agent = tree_at(lambda x: (x.B, x.pB, x.I), agent, (E_qB, qB, I_updated))
+
+        return agent

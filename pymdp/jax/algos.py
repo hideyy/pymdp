@@ -701,3 +701,83 @@ def get_mmp_messages_kld_policies(ln_B, B, qs, ln_prior, B_deps):
         lnB_past = jtu.tree_map(lambda x: 0., qs)
 
     return lnB_future, lnB_past, lnB_future_for_kld
+
+def mirror_gradient_descent_step_tmp(tau, ln_A, lnB_past, lnB_future, ln_qs):
+    """
+    u_{k+1} = u_{k} - \nabla_p F_k
+    p_k = softmax(u_k)
+    """
+    err2 = ln_A - ln_qs + lnB_past + lnB_future
+    ln_qs_tmp = ln_qs + tau * err2
+    #qs = nn.softmax(ln_qs - ln_qs.mean(axis=-1, keepdims=True))
+
+    return err2
+
+def update_marginals2(get_messages, obs, A, B, prior, A_dependencies, B_dependencies, num_iter=1, tau=1.,):
+    """" Version of marginal update that uses a sparse dependency matrix for A """
+
+    T = obs[0].shape[0]
+    ln_B = jtu.tree_map(log_stable, B)
+    # log likelihoods -> $\ln(A)$ for all time steps
+    # for $k > t$ we have $\ln(A) = 0$
+
+    def get_log_likelihood(obs_t, A):
+       # # mapping over batch dimension
+       # return vmap(compute_log_likelihood_per_modality)(obs_t, A)
+       return compute_log_likelihood_per_modality(obs_t, A)
+
+    # mapping over time dimension of obs array
+    log_likelihoods = vmap(get_log_likelihood, (0, None))(obs, A) # this gives a sequence of log-likelihoods (one for each `t`)
+
+    # log marginals -> $\ln(q(s_t))$ for all time steps and factors
+    ln_qs = jtu.tree_map( lambda p: jnp.broadcast_to(jnp.zeros_like(p), (T,) + p.shape), prior)
+
+    # log prior -> $\ln(p(s_t))$ for all factors
+    ln_prior = jtu.tree_map(log_stable, prior)
+
+    qs = jtu.tree_map(nn.softmax, ln_qs)
+    err_2 = jtu.tree_map(lambda x: jnp.zeros_like(x), qs)
+
+    def scan_fn(carry, iter):
+        #qs = carry
+        qs, err2 = carry
+
+        ln_qs = jtu.tree_map(log_stable, qs)
+        # messages from future $m_+(s_t)$ and past $m_-(s_t)$ for all time steps and factors. For t = T we have that $m_+(s_T) = 0$
+        
+        lnB_past, lnB_future = get_messages(ln_B, B, qs, ln_prior, B_dependencies)
+
+        mgds = jtu.Partial(mirror_gradient_descent_step, tau)
+        mgds_tmp = jtu.Partial(mirror_gradient_descent_step_tmp, tau)
+
+        ln_As = vmap(all_marginal_log_likelihood, in_axes=(0, 0, None))(qs, log_likelihoods, A_dependencies)
+
+        qs = jtu.tree_map(mgds, ln_As, lnB_past, lnB_future, ln_qs)
+        err2 = jtu.tree_map(mgds_tmp, ln_As, lnB_past, lnB_future, ln_qs)
+
+        #return qs, None
+        return (qs, err2), None
+
+    #qs, _ = lax.scan(scan_fn, qs, jnp.arange(num_iter))
+
+    #return qs
+ 
+    (qs, err), _ = lax.scan(scan_fn, (qs, err_2), jnp.arange(num_iter))
+
+    return qs, err
+
+def run_mmp2(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=1, tau=1.):
+    #qs = update_marginals(
+    qs, err = update_marginals2(
+        get_mmp_messages, 
+        obs, 
+        A, 
+        B, 
+        prior, 
+        A_dependencies, 
+        B_dependencies, 
+        num_iter=num_iter, 
+        tau=tau
+    )
+    #return qs
+    return qs, err

@@ -3,7 +3,7 @@
 # pylint: disable=no-member
 
 import jax.numpy as jnp
-from .algos import run_factorized_fpi, run_mmp, run_vmp, run_mmp_vfe, run_mmp_vfe_policies
+from .algos import run_factorized_fpi, run_mmp, run_vmp, run_mmp_vfe, run_mmp_vfe_policies, run_mmp2
 from jax import tree_util as jtu, lax
 from jax import vmap
 from jax.experimental.sparse._base import JAXSparse
@@ -622,4 +622,56 @@ def update_posterior_states_vfe_policies2(
     un = jnp.array(un) 
     
     return qs_hist, err, vfe, kld, bs, un
+
+def update_posterior_states2(
+        A, 
+        B, 
+        obs, 
+        past_actions, 
+        prior=None, 
+        qs_hist=None, 
+        A_dependencies=None, 
+        B_dependencies=None, 
+        num_iter=16, 
+        method='fpi'
+    ):
+
+    if method == 'fpi' or method == "ovf":
+        # format obs to select only last observation
+        curr_obs = jtu.tree_map(lambda x: x[-1], obs)
+        qs = run_factorized_fpi(A, curr_obs, prior, A_dependencies, num_iter=num_iter)
+    else:
+        # format B matrices using action sequences here
+        # TODO: past_actions can be None
+        if past_actions is not None:
+            nf = len(B)
+            actions_tree = [past_actions[:, i] for i in range(nf)]
+            
+            # move time steps to the leading axis (leftmost)
+            # this assumes that a policy is always specified as the rightmost axis of Bs
+            B = jtu.tree_map(lambda b, a_idx: jnp.moveaxis(b[..., a_idx], -1, 0), B, actions_tree)
+        else:
+            B = None
+
+        # outputs of both VMP and MMP should be a list of hidden state factors, where each qs[f].shape = (T, batch_dim, num_states_f)
+        if method == 'vmp':
+            qs = run_vmp(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter) 
+        if method == 'mmp':
+            #qs = run_mmp(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter)
+            qs, err = run_mmp2(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter)
+    
+    if qs_hist is not None:
+        if method == 'fpi' or method == "ovf":
+            qs_hist = jtu.tree_map(lambda x, y: jnp.concatenate([x, jnp.expand_dims(y, 0)], 0), qs_hist, qs)
+        else:
+            #TODO: return entire history of beliefs
+            qs_hist = qs
+    else:
+        if method == 'fpi' or method == "ovf":
+            qs_hist = jtu.tree_map(lambda x: jnp.expand_dims(x, 0), qs)
+        else:
+            qs_hist = qs
+    
+    #return qs_hist
+    return qs_hist, err
     
