@@ -1212,3 +1212,14 @@ class Agent(Module):
         
         kld = inference.calc_KLD(past_beliefs, current_beliefs)
         return kld
+    
+    def compute_expected_state(self, action, qs):
+        # return empirical_prior, and the history of posterior beliefs (filtering distributions) held about hidden states at times 1, 2 ... t
+
+        # this computation of the predictive prior is correct only for fully factorised Bs.
+        
+        qs_last = jtu.tree_map( lambda x: x[:, -1], qs)
+        propagate_beliefs = partial(control.compute_expected_state, B_dependencies=self.B_dependencies)
+        pred = vmap(propagate_beliefs)(qs_last, self.B, action)
+        
+        return pred
