@@ -581,6 +581,8 @@ class Agent(Module):
             #print("combine")
             past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate((x, y), axis=1), past_qs, empirical_prior)
             #past_beliefs = jnp.concatenate((past_qs, empirical_prior), axis=1)
+            #print(past_beliefs[0].shape)
+            #print(current_qs[0].shape)
         else:
             past_beliefs = empirical_prior
         #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate([x, jnp.expand_dims(jnp.array(y), axis=1)], axis=1), past_qs, empirical_prior)
