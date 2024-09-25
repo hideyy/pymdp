@@ -1361,3 +1361,13 @@ class Agent(Module):
             agent = tree_at(lambda x: (x.B, x.pB, x.I), agent, (E_qB, qB, I_updated))
 
         return agent
+    
+    def compute_expected_state_obs(self, action, qs):
+        # return empirical_prior, and the history of posterior beliefs (filtering distributions) held about hidden states at times 1, 2 ... t
+
+        # this computation of the predictive prior is correct only for fully factorised Bs.
+        qs_last = jtu.tree_map( lambda x: x[:, -1], qs)
+        propagate_beliefs = partial(control.compute_expected_state_obs, A_dependencies=self.A_dependencies,B_dependencies=self.B_dependencies)
+        qs_pi, qo_pi = vmap(propagate_beliefs)(qs_last, self.A, self.B, action)
+        
+        return qs_pi, qo_pi

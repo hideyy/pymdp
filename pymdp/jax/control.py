@@ -773,3 +773,25 @@ def compute_G_policy_inductive_efe_qs_pi( A, B, C, pA, pB, A_dependencies, B_dep
     final_state, _ = lax.scan(scan_body, (qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,inductive_value), jnp.arange(policy_i.shape[0]))
     _, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, inductive_value = final_state
     return neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB
+
+def compute_expected_state_obs(qs_prior, A, B, u_t, A_dependencies, B_dependencies=None): 
+    """
+    Compute posterior over next state, given belief about previous state, transition model and action...
+    """
+    #Note: this algorithm is only correct if each factor depends only on itself. For any interactions, 
+    # we will have empirical priors with codependent factors. 
+    assert len(u_t) == len(B)  
+    qs_next = []
+    for B_f, u_f, deps in zip(B, u_t, B_dependencies):
+        relevant_factors = [qs_prior[idx] for idx in deps]
+        qs_next_f = factor_dot(B_f[...,u_f], relevant_factors, keep_dims=(0,))
+        qs_next.append(qs_next_f)
+        
+    # P(s'|s, u) = \sum_{s, u} P(s'|s) P(s|u) P(u|pi)P(pi) because u </-> pi
+        
+    def compute_expected_obs_modality(A_m, m):
+        deps = A_dependencies[m]
+        relevant_factors = [qs_next[idx] for idx in deps]
+        return factor_dot(A_m, relevant_factors, keep_dims=(0,))
+
+    return qs_next,jtu.tree_map(compute_expected_obs_modality, A, list(range(len(A))))

@@ -379,4 +379,7 @@ def update_obs_likelihood_dirichlet_m_epsilon(pA_m, obs_m, qs, dependencies_m, l
     new_pA_m_temp = new_pA_m + epsilon
     A_m = dirichlet_expected_value(new_pA_m_temp)
 
+    """ A_m = dirichlet_expected_value(new_pA_m)
+    A_m = A_m + epsilon """
+    
     return new_pA_m, A_m
