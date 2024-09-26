@@ -1371,3 +1371,19 @@ class Agent(Module):
         qs_pi, qo_pi = vmap(propagate_beliefs)(qs_last, self.A, self.B, action)
         
         return qs_pi, qo_pi
+    
+    def calc_KLD_prior_posterior(self, past_qs, current_qs):
+        
+        """ if past_qs is not None:
+            
+            empirical_prior = jtu.tree_map(lambda x: x[None, ...], empirical_prior) # 2次元配列を3次元配列に変換
+            #print("combine")
+            past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate((x, y), axis=1), past_qs, empirical_prior)
+            #past_beliefs = jnp.concatenate((past_qs, empirical_prior), axis=1)
+            #print(past_beliefs[0].shape)
+            #print(current_qs[0].shape)
+        else:
+            past_beliefs = empirical_prior """
+        
+        kld = inference.calc_KLD(past_qs,current_qs)
+        return kld
