@@ -427,7 +427,7 @@ def update_marginals_vfe(get_messages, obs, A, B, prior, A_dependencies, B_depen
         lnB_future, lnB_past, lnB_future_for_kld = get_messages(ln_B, B, qs, ln_prior, B_dependencies)
 
         #mgds = jtu.Partial(mirror_gradient_descent_step, tau)
-        mgds_vfe = jtu.Partial(mirror_gradient_descent_step_vfe_kld, tau)
+        mgds_vfe = jtu.Partial(mirror_gradient_descent_step_vfe_kld2, tau)
 
         ln_As = vmap(all_marginal_log_likelihood, in_axes=(0, 0, None))(qs, log_likelihoods, A_dependencies)
 
@@ -781,3 +781,21 @@ def run_mmp2(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=1, tau=1
     )
     #return qs
     return qs, err
+
+def mirror_gradient_descent_step_vfe_kld2(tau, ln_A, lnB_past, lnB_future, ln_qs, lnB_future_for_kld):
+    """
+    u_{k+1} = u_{k} - \nabla_p F_k
+    p_k = softmax(u_k)"""
+    err = ln_A - ln_qs + lnB_past + lnB_future
+    kld_tmp = ln_A - ln_qs
+    bs_tmp = lnB_past + lnB_future - ln_qs
+    un_tmp = ln_A
+    ps = nn.softmax(ln_A - ln_A.mean(axis=-1, keepdims=True))
+    ln_qs = ln_qs + tau * err
+    qs = nn.softmax(ln_qs - ln_qs.mean(axis=-1, keepdims=True))
+
+    kld = -1 * jnp.multiply(ps, kld_tmp)
+    bs = -1 * jnp.multiply(qs, bs_tmp)
+    un = -1 * jnp.multiply(qs, un_tmp)
+    vfe = -1 * jnp.multiply(qs, err)
+    return qs, err, vfe, kld, bs, un
