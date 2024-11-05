@@ -376,7 +376,7 @@ if __name__ == "__main__":
     # print(jit(grad(sum_prod))(log_prior))
 
 def run_mmp_vfe(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=1, tau=1.):
-    qs, err, vfe, kld, bs, un = update_marginals_vfe(
+    qs, err, vfe, S_Hqs, bs, un = update_marginals_vfe(#qs, err, vfe, kld, bs, un
         get_mmp_messages_kld, 
         obs, 
         A, 
@@ -387,7 +387,7 @@ def run_mmp_vfe(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=1, ta
         num_iter=num_iter, 
         tau=tau
     )
-    return qs, err, vfe, kld, bs, un
+    return qs, err, vfe, S_Hqs, bs, un #qs, err, vfe, kld, bs, un
 
 def update_marginals_vfe(get_messages, obs, A, B, prior, A_dependencies, B_dependencies, num_iter=1, tau=1.,):
     """" Version of marginal update that uses a sparse dependency matrix for A """
@@ -419,7 +419,7 @@ def update_marginals_vfe(get_messages, obs, A, B, prior, A_dependencies, B_depen
     qs = jtu.tree_map(nn.softmax, ln_qs)
 
     def scan_fn(carry, iter):
-        qs, err, vfe, kld, bs, un  = carry
+        qs, err, vfe, S_Hqs, bs, un  = carry #qs, err, vfe, kld, bs, un
 
         ln_qs = jtu.tree_map(log_stable, qs)
         # messages from future $m_+(s_t)$ and past $m_-(s_t)$ for all time steps and factors. For t = T we have that $m_+(s_T) = 0$
@@ -432,34 +432,36 @@ def update_marginals_vfe(get_messages, obs, A, B, prior, A_dependencies, B_depen
         ln_As = vmap(all_marginal_log_likelihood, in_axes=(0, 0, None))(qs, log_likelihoods, A_dependencies)
 
         output = jtu.tree_map(mgds_vfe, ln_As, lnB_past, lnB_future, ln_qs, lnB_future_for_kld)
-        qs, err, vfe, kld, bs, un = zip(*output)
-        return (list(qs), list(err), list(vfe), list(kld), list(bs), list(un)), None
+        qs, err, vfe, S_Hqs, bs, un = zip(*output) #qs, err, vfe, kld, bs, un
+        return (list(qs), list(err), list(vfe), list(S_Hqs), list(bs), list(un)), None #(list(qs), list(err), list(vfe), list(kld), list(bs), list(un)), None
     err = qs
     vfe = qs
-    kld = qs
+    S_Hqs = qs #kld = qs
     bs = qs
     un = qs
-    output, _ = lax.scan(scan_fn, (qs, err, vfe, kld, bs, un), jnp.arange(num_iter))
-    qs, err, vfe, kld, bs, un = output
-    return qs, err, vfe, kld, bs, un
+    output, _ = lax.scan(scan_fn, (qs, err, vfe, S_Hqs, bs, un), jnp.arange(num_iter)) #qs, err, vfe, kld, bs, un
+    qs, err, vfe, S_Hqs, bs, un = output #qs, err, vfe, kld, bs, un
+    return qs, err, vfe, S_Hqs, bs, un #qs, err, vfe, kld, bs, un
 
 def mirror_gradient_descent_step_vfe_kld(tau, ln_A, lnB_past, lnB_future, ln_qs, lnB_future_for_kld):
     """
     u_{k+1} = u_{k} - \nabla_p F_k
     p_k = softmax(u_k)"""
     err = ln_A - ln_qs + lnB_past + lnB_future
-    kld_tmp = ln_qs - lnB_future_for_kld
+    #kld_tmp = ln_qs - lnB_future_for_kld
+    S_Hqs_tmp=ln_A + lnB_past + lnB_future
     bs_tmp = lnB_past + lnB_future - ln_qs
     un_tmp = ln_A
     prior = nn.softmax(lnB_future_for_kld - lnB_future_for_kld.mean(axis=-1, keepdims=True))
     ln_qs = ln_qs + tau * err
     qs = nn.softmax(ln_qs - ln_qs.mean(axis=-1, keepdims=True))
 
-    kld = -1 * jnp.multiply(prior, kld_tmp)
+    S_Hqs = -1 * jnp.multiply(qs, S_Hqs_tmp)
+    #kld = -1 * jnp.multiply(prior, kld_tmp)
     bs = -1 * jnp.multiply(qs, bs_tmp)
     un = -1 * jnp.multiply(qs, un_tmp)
     vfe = -1 * jnp.multiply(qs, err)
-    return qs, err, vfe, kld, bs, un
+    return qs, err, vfe, S_Hqs, bs, un #qs, err, vfe, kld, bs, un
 
 def get_mmp_messages_kld(ln_B, B, qs, ln_prior, B_deps):
     

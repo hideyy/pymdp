@@ -537,7 +537,7 @@ class Agent(Module):
             method=self.inference_algo
         )
         
-        output, err, vfe, kld, bs, un = vmap(infer_states)(
+        output, err, vfe, S_Hqs, bs, un = vmap(infer_states)(  #output, err, vfe, kld, bs, un 
             A,
             self.B,
             o_vec,
@@ -548,11 +548,12 @@ class Agent(Module):
         #vfe=vfe[0].sum(2)
         vfe=jtu.tree_map(lambda x: x.sum(2),vfe)
         err=jtu.tree_map(lambda x: x.sum(2),err)
-        kld=jtu.tree_map(lambda x: x.sum(2),kld)
+        S_Hqs=jtu.tree_map(lambda x: x.sum(2),S_Hqs)
+        #kld=jtu.tree_map(lambda x: x.sum(2),kld)
         bs=jtu.tree_map(lambda x: x.sum(2),bs)
         un=jtu.tree_map(lambda x: x.sum(2),un)
 
-        return output, err, vfe, kld, bs, un
+        return output, err, vfe, S_Hqs, bs, un#output, err, vfe, kld, bs, un
     
     #@vmap
     def calc_KLD_past_currentqs(self, empirical_prior, past_qs, current_qs):
