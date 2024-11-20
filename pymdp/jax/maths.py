@@ -155,3 +155,17 @@ if __name__ == '__main__':
     res = jit(compute_log_likelihood)(obs_vec, A)
     
     print(res)
+
+def compute_modelevidence(Po, obs, distr_obs=True):
+    def get_evidence_single_modality(o_m, po_m, distr_obs=True):
+            """Return observation likelihood for a single observation modality m"""
+            if distr_obs:
+                expanded_obs = jnp.expand_dims(o_m, tuple(range(1, po_m.ndim)))
+                likelihood = (expanded_obs * po_m).sum(axis=0)
+            else:
+                likelihood = po_m[o_m]
+
+            return likelihood
+    result = tree_util.tree_map(lambda o, po: get_evidence_single_modality(o, po, distr_obs=distr_obs), obs, Po)
+    #ll = jnp.sum(jnp.stack(result), 0)
+    return result

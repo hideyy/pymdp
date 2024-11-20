@@ -553,7 +553,7 @@ class Agent(Module):
         bs=jtu.tree_map(lambda x: x.sum(2),bs)
         un=jtu.tree_map(lambda x: x.sum(2),un)
 
-        return output, err, vfe, S_Hqs, bs, un#output, err, vfe, kld, bs, un
+        return output, err, vfe, S_Hqs, bs, un#output, err, vfe, kld(S_Hqs)(po), bs, un
     
     #@vmap
     def calc_KLD_past_currentqs(self, empirical_prior, past_qs, current_qs):

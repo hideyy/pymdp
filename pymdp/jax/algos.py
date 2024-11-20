@@ -5,7 +5,7 @@ from jax import jit, vmap, grad, lax, nn
 # from jax.config import config
 # config.update("jax_enable_x64", True)
 
-from .maths import compute_log_likelihood, compute_log_likelihood_per_modality, log_stable, MINVAL, factor_dot, factor_dot_flex
+from .maths import compute_log_likelihood, compute_log_likelihood_per_modality, log_stable, MINVAL, factor_dot, factor_dot_flex, compute_modelevidence
 from typing import Any, List
 
 def add(x, y):
@@ -419,31 +419,39 @@ def update_marginals_vfe(get_messages, obs, A, B, prior, A_dependencies, B_depen
     qs = jtu.tree_map(nn.softmax, ln_qs)
 
     def scan_fn(carry, iter):
-        qs, err, vfe, S_Hqs, bs, un  = carry #qs, err, vfe, kld, bs, un
+        qs, err, vfe, S_Hqs, bs, un  = carry #qs, err, vfe, kld, bs, un#S_Hqs
 
         ln_qs = jtu.tree_map(log_stable, qs)
         # messages from future $m_+(s_t)$ and past $m_-(s_t)$ for all time steps and factors. For t = T we have that $m_+(s_T) = 0$
         
-        lnB_future, lnB_past, lnB_future_for_kld = get_messages(ln_B, B, qs, ln_prior, B_dependencies)
+        lnB_future, lnB_past, lnB_future_for_kld = get_messages(ln_B, B, qs, ln_prior, B_dependencies)#, B_future
 
+        """ def compute_expected_obs_modality(A_m, m):
+            deps = A_dependencies[m]
+            relevant_factors = [B_future[idx] for idx in deps]
+            return factor_dot(A_m, relevant_factors, keep_dims=(0,)) """
+
+        ##po=jtu.tree_map(compute_expected_obs_modality, A, list(range(len(A))))
+        
+        ##po = compute_modelevidence(po,obs)
         #mgds = jtu.Partial(mirror_gradient_descent_step, tau)
-        mgds_vfe = jtu.Partial(mirror_gradient_descent_step_vfe_kld2, tau)
+        mgds_vfe = jtu.Partial(mirror_gradient_descent_step_vfe_kld, tau)
 
         ln_As = vmap(all_marginal_log_likelihood, in_axes=(0, 0, None))(qs, log_likelihoods, A_dependencies)
 
-        output = jtu.tree_map(mgds_vfe, ln_As, lnB_past, lnB_future, ln_qs, lnB_future_for_kld)
-        qs, err, vfe, S_Hqs, bs, un = zip(*output) #qs, err, vfe, kld, bs, un
-        return (list(qs), list(err), list(vfe), list(S_Hqs), list(bs), list(un)), None #(list(qs), list(err), list(vfe), list(kld), list(bs), list(un)), None
+        output = jtu.tree_map(mgds_vfe, ln_As, lnB_past, lnB_future, ln_qs)#lnB_future_for_kld
+        qs, err, vfe, S_Hqs, bs, un = zip(*output) #qs, err, vfe, kld, bs, unS_Hqs
+        return (list(qs), list(err), list(vfe), list(S_Hqs), list(bs), list(un)), None #(list(qs), list(err), list(vfe), list(kld), list(bs), list(un))S_Hqs, None
     err = qs
     vfe = qs
     S_Hqs = qs #kld = qs
     bs = qs
     un = qs
-    output, _ = lax.scan(scan_fn, (qs, err, vfe, S_Hqs, bs, un), jnp.arange(num_iter)) #qs, err, vfe, kld, bs, un
-    qs, err, vfe, S_Hqs, bs, un = output #qs, err, vfe, kld, bs, un
-    return qs, err, vfe, S_Hqs, bs, un #qs, err, vfe, kld, bs, un
+    output, _ = lax.scan(scan_fn, (qs, err, vfe, S_Hqs, bs, un), jnp.arange(num_iter)) #qs, err, vfe, kld, bs, unS_Hqs
+    qs, err, vfe, S_Hqs, bs, un = output #qs, err, vfe, kld, bs, unS_Hqs,po
+    return qs, err, vfe, S_Hqs, bs, un #qs, err, vfe, kld, bs, unS_Hqs,po
 
-def mirror_gradient_descent_step_vfe_kld(tau, ln_A, lnB_past, lnB_future, ln_qs, lnB_future_for_kld):
+def mirror_gradient_descent_step_vfe_kld(tau, ln_A, lnB_past, lnB_future, ln_qs):
     """
     u_{k+1} = u_{k} - \nabla_p F_k
     p_k = softmax(u_k)"""
@@ -452,7 +460,7 @@ def mirror_gradient_descent_step_vfe_kld(tau, ln_A, lnB_past, lnB_future, ln_qs,
     S_Hqs_tmp=ln_A + lnB_past + lnB_future
     bs_tmp = lnB_past + lnB_future - ln_qs
     un_tmp = ln_A
-    prior = nn.softmax(lnB_future_for_kld - lnB_future_for_kld.mean(axis=-1, keepdims=True))
+    #prior = nn.softmax(lnB_future_for_kld - lnB_future_for_kld.mean(axis=-1, keepdims=True))
     ln_qs = ln_qs + tau * err
     qs = nn.softmax(ln_qs - ln_qs.mean(axis=-1, keepdims=True))
 
@@ -496,6 +504,21 @@ def get_mmp_messages_kld(ln_B, B, qs, ln_prior, B_deps):
         msg = jnp.concatenate([jnp.expand_dims(ln_prior, 0), msg], axis=0)
 
         return msg
+    
+    def forward_Bqs(b, ln_prior, f):
+        xs = get_deps_forw(qs, B_deps[f])
+        dims = tuple((0, 2 + i) for i in range(len(B_deps[f])))
+        msg = log_stable(factor_dot_flex(b, xs, dims, keep_dims=(0, 1) ))
+        #print(b.shape)#(3, 20, 20)
+        #print(xs[0].shape)#(2, 20)
+        # append log_prior as a first message 
+        msg = jnp.concatenate([jnp.expand_dims(ln_prior, 0), msg], axis=0)
+        # mutliply with 1/2 all but the last msg
+        T = len(msg)
+        if T > 1:
+            msg = msg #* jnp.pad( 0.5 * jnp.ones(T - 1), (0, 1), constant_values=1.)[:, None]
+        msg = jnp.exp(msg)
+        return msg
 
     def backward(Bs, xs):
         msg = 0.
@@ -527,12 +550,14 @@ def get_mmp_messages_kld(ln_B, B, qs, ln_prior, B_deps):
         lnB_future = jtu.tree_map(forward, B, ln_prior, factors)
         lnB_future_for_kld = jtu.tree_map(forward_for_kld, B, ln_prior, factors) 
         lnB_past = jtu.tree_map(lambda f: backward(B_marg[f], get_deps_back(qs, inv_B_deps[f])), factors)
+        B_future = jtu.tree_map(forward_Bqs, B, ln_prior, factors)
     else: 
         lnB_future = jtu.tree_map(lambda x: jnp.expand_dims(x, 0), ln_prior)
         lnB_future_for_kld = jtu.tree_map(lambda x: jnp.expand_dims(x, 0), ln_prior)
         lnB_past = jtu.tree_map(lambda x: 0., qs)
+        B_future = jtu.tree_map(forward_Bqs, B, ln_prior, factors)
 
-    return lnB_future, lnB_past, lnB_future_for_kld
+    return lnB_future, lnB_past, lnB_future_for_kld##B_future
 
 def run_mmp_vfe_policies(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=1, tau=1., policy_len=1.):
     qs, err, vfe, kld, bs, un = update_marginals_vfe_policies(
