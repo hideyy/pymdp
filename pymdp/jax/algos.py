@@ -457,7 +457,7 @@ def mirror_gradient_descent_step_vfe_kld(tau, ln_A, lnB_past, lnB_future, ln_qs)
     p_k = softmax(u_k)"""
     err = ln_A - ln_qs + lnB_past + lnB_future
     #kld_tmp = ln_qs - lnB_future_for_kld
-    S_Hqs_tmp=ln_A + lnB_past + lnB_future
+    S_Hqs_tmp=lnB_past + lnB_future #BS+Hqs##ln_A + lnB_past + lnB_future
     bs_tmp = lnB_past + lnB_future - ln_qs
     un_tmp = ln_A
     #prior = nn.softmax(lnB_future_for_kld - lnB_future_for_kld.mean(axis=-1, keepdims=True))
