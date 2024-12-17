@@ -561,24 +561,69 @@ def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_d
 
 def compute_predicted_KLD(qs, qo, A, A_dependencies):
     
-
+    #print("qs:", qs)
+    #print("qo:", qo)
+    #print("A:", A)
+    #print("A_dependencies:", A_dependencies)
     def compute_pKLD_for_modality(qo_m, A_m, m):
         H_qo = stable_entropy(qo_m)
         deps = A_dependencies[m]
-        #relevant_factors = [qs[idx] for idx in deps]
-        relevant_factors = jnp.array([qs[idx] for idx in deps])
+        relevant_factors = [qs[idx] for idx in deps]
+        #relevant_factors = [jnp.array(qs[idx]) for idx in deps]
         #print("qo_ln_A_m")
+        #qs_next_f = factor_dot(B_f[...,u_f], relevant_factors, keep_dims=(0,))
+        """ 
+        relevant_factors = jnp.array([qs[idx] for idx in deps])
         qs_ln_A_m = - stable_cross_entropy(relevant_factors,A_m)
         #print("qo_qs_ln_A_m")
-        qo_qs_ln_A_m = -(qo_m * qs_ln_A_m).sum()
+        qo_qs_ln_A_m = -(qo_m * qs_ln_A_m).sum() """
+        #qo_ln_A_m = - stable_cross_entropy(qo_m,A_m)
+        log_A_m = jnp.log(A_m)
+        #print(log_A_m)
+        #print(qo_m)
+        #qo_ln_A_m =-(qo_m * log_A_m).sum(0)
+        qo_ln_A_m = -(jnp.expand_dims(qo_m, axis=tuple(range(1, log_A_m.ndim))) * log_A_m).sum(0)
+        #qo_ln_A_m = jnp.einsum('i,ijklm->jklm', qo_m, log_A_m)
+        #print(qo_ln_A_m)
+        #qo_ln_A_m = - factor_dot(log_A_m, qo_m)
+        #print("qo_qs_ln_A_m")
+        #qo_qs_ln_A_m = -(qo_m * qs_ln_A_m).sum()
+        qo_qs_ln_A_m = factor_dot(qo_ln_A_m, relevant_factors)
         #qo_qs_ln_A_m = factor_dot(qs_ln_A_m, qo_m)
+        #print(qo_qs_ln_A_m)
+        
+        #qo_qs_ln_A_m = factor_dot(H_A_m, relevant_factors)
+        return qo_qs_ln_A_m - H_qo
+        """ H_qo = stable_entropy(qo_m)
+        deps = A_dependencies[m]
+        
+        # 各要素の形状を揃えるための処理
+        relevant_factors = [qs[idx] for idx in deps]
+        max_shape = jnp.max(jnp.array([q.shape for q in relevant_factors]), axis=0)
+        
+        # パディングを行う関数
+        def pad_to_max_shape(q):
+        # 次元数を確認し、必要に応じてパディングを行う
+            if q.ndim == 1:
+                pad_width = (0, max_shape[0] - q.shape[0])
+                return jnp.pad(q, (pad_width,), mode='constant')
+            elif q.ndim == 2:
+                pad_width = ((0, max_shape[0] - q.shape[0]), (0, max_shape[1] - q.shape[1]))
+                return jnp.pad(q, pad_width, mode='constant')
+            else:
+                raise ValueError("Unsupported dimension for padding: {}".format(q.ndim))
+
+        # 各要素を最大の形状にパディング
+        padded_factors = [pad_to_max_shape(q) for q in relevant_factors]
+        
+        qs_ln_A_m = - stable_cross_entropy(jnp.array(padded_factors), A_m)
+        qo_qs_ln_A_m = -(qo_m * qs_ln_A_m).sum() """
         """ print("qo_ln_A_m")
         qo_ln_A_m = - stable_cross_entropy(A_m,qo_m)
         print("qo_qs_ln_A_m")
         #qo_qs_ln_A_m = -(qo_m * qs_ln_A_m).sum()
         qo_qs_ln_A_m = factor_dot(qo_ln_A_m, relevant_factors) """
-        #qo_qs_ln_A_m = factor_dot(H_A_m, relevant_factors)
-        return qo_qs_ln_A_m - H_qo
+        #return qo_qs_ln_A_m - H_qo
     
     pKLD_per_modality = jtu.tree_map(compute_pKLD_for_modality, qo, A, list(range(len(A))))
         
@@ -589,13 +634,20 @@ def compute_predicted_free_energy(qs, qo, A, A_dependencies):
 
     def compute_pF_for_modality(qo_m, A_m, m):
         #H_qo = stable_entropy(qo_m)
-        deps = A_dependencies[m]
+        """ deps = A_dependencies[m]
         relevant_factors = jnp.array([qs[idx] for idx in deps])
         
         qs_ln_A_m = - stable_cross_entropy(relevant_factors,A_m)
         
         qo_qs_ln_A_m = -(qo_m * qs_ln_A_m).sum()
-        #qo_qs_ln_A_m = factor_dot(H_A_m, relevant_factors)
+        #qo_qs_ln_A_m = factor_dot(H_A_m, relevant_factors) """
+        deps = A_dependencies[m]
+        relevant_factors = [qs[idx] for idx in deps]
+        log_A_m = jnp.log(A_m)
+        qo_ln_A_m = -(jnp.expand_dims(qo_m, axis=tuple(range(1, log_A_m.ndim))) * log_A_m).sum(0)
+        qo_qs_ln_A_m = factor_dot(qo_ln_A_m, relevant_factors)
+        #qo_qs_ln_A_m = factor_dot(qs_ln_A_m, qo_m)
+        #print(qo_qs_ln_A_m)
         return qo_qs_ln_A_m #- H_qo
     
     pF_per_modality = jtu.tree_map(compute_pF_for_modality, qo, A, list(range(len(A))))
