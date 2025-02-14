@@ -640,7 +640,7 @@ class Agent(Module):
             gamma=self.gamma,
             inductive_epsilon=self.inductive_epsilon
         )
-
+        #print(PBS)
         return q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB
     
     def infer_states_vfe_policies(self, observations, empirical_prior, *, past_actions=None, qs_hist=None, mask=None):

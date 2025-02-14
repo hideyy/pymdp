@@ -208,7 +208,12 @@ def compute_info_gain(qs, qo, A, A_dependencies):
         H_A_m = - stable_xlogx(A_m).sum(0)
         deps = A_dependencies[m]
         relevant_factors = [qs[idx] for idx in deps]
+        #print(H_A_m)
+        #print(relevant_factors)
+        #print("qs_H_A_m")
         qs_H_A_m = factor_dot(H_A_m, relevant_factors)
+        #print(qs_H_A_m)
+        #print(H_qo - qs_H_A_m)
         return H_qo - qs_H_A_m
     
     info_gains_per_modality = jtu.tree_map(compute_info_gain_for_modality, qo, A, list(range(len(A))))
@@ -493,6 +498,7 @@ def update_posterior_policies_inductive_efe(policy_matrix, qs_init, A, B, C, E, 
     oRisk_a_p = results[4]  # 状態情報利得
     PBS_pA_a_p = results[5]  # パラメータAに関する情報利得
     PBS_pB_a_p = results[6]  # パラメータBに関する情報利得
+    #print(PBS_a_p)
     # only in the case of policy-dependent qs_inits
     # in_axes_list = (1,) * n_factors
     # all_efe_of_policies = vmap(compute_G_policy, in_axes=(in_axes_list, 0))(qs_init_pi, policy_matrix)
@@ -517,7 +523,7 @@ def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_d
 
         qo = compute_expected_obs(qs_next, A, A_dependencies)
 
-        info_gain += compute_info_gain(qs_next, qo, A, A_dependencies) if use_states_info_gain else 0.
+        info_gain += compute_info_gain(qs_next, qo, A, A_dependencies) if use_states_info_gain else 0.#compute_predicted_KLD(qs_next, qo, A, A_dependencies)
 
         predicted_KLD += compute_predicted_KLD(qs_next, qo, A, A_dependencies) 
         #print("PFE")
@@ -557,6 +563,15 @@ def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_d
     inductive_value=0.
     final_state, _ = lax.scan(scan_body, (qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value), jnp.arange(policy_i.shape[0]))
     _, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value = final_state
+    #print(info_gain)
+    #print(predicted_KLD)
+    """print(predicted_F)
+    print(oRisk)
+    print(param_info_gainA)
+    print(param_info_gainB)
+
+    print(inductive_value) """
+    #print(neg_G)
     return neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB
 
 def compute_predicted_KLD(qs, qo, A, A_dependencies):
@@ -578,52 +593,40 @@ def compute_predicted_KLD(qs, qo, A, A_dependencies):
         #print("qo_qs_ln_A_m")
         qo_qs_ln_A_m = -(qo_m * qs_ln_A_m).sum() """
         #qo_ln_A_m = - stable_cross_entropy(qo_m,A_m)
-        log_A_m = jnp.log(A_m)
+        #log_A_m = jnp.log(A_m)
+        log_A_m = log_stable(A_m)
         #print(log_A_m)
         #print(qo_m)
         #qo_ln_A_m =-(qo_m * log_A_m).sum(0)
         qo_ln_A_m = -(jnp.expand_dims(qo_m, axis=tuple(range(1, log_A_m.ndim))) * log_A_m).sum(0)
         #qo_ln_A_m = jnp.einsum('i,ijklm->jklm', qo_m, log_A_m)
-        #print(qo_ln_A_m)
+        
         #qo_ln_A_m = - factor_dot(log_A_m, qo_m)
         #print("qo_qs_ln_A_m")
+        #print(qo_ln_A_m)
         #qo_qs_ln_A_m = -(qo_m * qs_ln_A_m).sum()
+        #print(relevant_factors)
         qo_qs_ln_A_m = factor_dot(qo_ln_A_m, relevant_factors)
+        #print(qo_qs_ln_A_m - H_qo)
         #qo_qs_ln_A_m = factor_dot(qs_ln_A_m, qo_m)
-        #print(qo_qs_ln_A_m)
+        
         
         #qo_qs_ln_A_m = factor_dot(H_A_m, relevant_factors)
         return qo_qs_ln_A_m - H_qo
-        """ H_qo = stable_entropy(qo_m)
-        deps = A_dependencies[m]
-        
-        # 各要素の形状を揃えるための処理
-        relevant_factors = [qs[idx] for idx in deps]
-        max_shape = jnp.max(jnp.array([q.shape for q in relevant_factors]), axis=0)
-        
-        # パディングを行う関数
-        def pad_to_max_shape(q):
-        # 次元数を確認し、必要に応じてパディングを行う
-            if q.ndim == 1:
-                pad_width = (0, max_shape[0] - q.shape[0])
-                return jnp.pad(q, (pad_width,), mode='constant')
-            elif q.ndim == 2:
-                pad_width = ((0, max_shape[0] - q.shape[0]), (0, max_shape[1] - q.shape[1]))
-                return jnp.pad(q, pad_width, mode='constant')
-            else:
-                raise ValueError("Unsupported dimension for padding: {}".format(q.ndim))
+        """ def compute_info_gain(qs, qo, A, A_dependencies):
+            
 
-        # 各要素を最大の形状にパディング
-        padded_factors = [pad_to_max_shape(q) for q in relevant_factors]
-        
-        qs_ln_A_m = - stable_cross_entropy(jnp.array(padded_factors), A_m)
-        qo_qs_ln_A_m = -(qo_m * qs_ln_A_m).sum() """
-        """ print("qo_ln_A_m")
-        qo_ln_A_m = - stable_cross_entropy(A_m,qo_m)
-        print("qo_qs_ln_A_m")
-        #qo_qs_ln_A_m = -(qo_m * qs_ln_A_m).sum()
-        qo_qs_ln_A_m = factor_dot(qo_ln_A_m, relevant_factors) """
-        #return qo_qs_ln_A_m - H_qo
+            def compute_info_gain_for_modality(qo_m, A_m, m):
+                H_qo = stable_entropy(qo_m)
+                H_A_m = - stable_xlogx(A_m).sum(0)
+                deps = A_dependencies[m]
+                relevant_factors = [qs[idx] for idx in deps]
+                qs_H_A_m = factor_dot(H_A_m, relevant_factors)
+                return H_qo - qs_H_A_m
+            
+            info_gains_per_modality = jtu.tree_map(compute_info_gain_for_modality, qo, A, list(range(len(A))))
+                
+            return jtu.tree_reduce(lambda x,y: x+y, info_gains_per_modality) """
     
     pKLD_per_modality = jtu.tree_map(compute_pKLD_for_modality, qo, A, list(range(len(A))))
         
@@ -643,7 +646,7 @@ def compute_predicted_free_energy(qs, qo, A, A_dependencies):
         #qo_qs_ln_A_m = factor_dot(H_A_m, relevant_factors) """
         deps = A_dependencies[m]
         relevant_factors = [qs[idx] for idx in deps]
-        log_A_m = jnp.log(A_m)
+        log_A_m = log_stable(A_m)
         qo_ln_A_m = -(jnp.expand_dims(qo_m, axis=tuple(range(1, log_A_m.ndim))) * log_A_m).sum(0)
         qo_qs_ln_A_m = factor_dot(qo_ln_A_m, relevant_factors)
         #qo_qs_ln_A_m = factor_dot(qs_ln_A_m, qo_m)

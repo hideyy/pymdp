@@ -32,10 +32,15 @@ def factor_dot(M, xs, keep_dims: Optional[Tuple[int]] = None):
     -------
     - `Y` [1D numpy.ndarray] - the result of the dot product
     """
+    #print(keep_dims)
     d = len(keep_dims) if keep_dims is not None else 0
     """ print("M",M.ndim)
     print("xs",len(xs))
     print("d",d) """
+    """ print(len(xs))
+    print(d) """
+    """ print(M)
+    print(xs) """
     assert M.ndim == len(xs) + d
     keep_dims = () if keep_dims is None else keep_dims
     dims = tuple((i,) for i in range(M.ndim) if i not in keep_dims)
@@ -62,6 +67,7 @@ def factor_dot_flex(M, xs, dims: List[Tuple[int]], keep_dims: Optional[Tuple[int
         args.extend(row)
 
     args += [keep_dims]
+    #print(contract(*args, backend='jax'))
     return contract(*args, backend='jax')
 
 def get_likelihood_single_modality(o_m, A_m, distr_obs=True):
