@@ -136,11 +136,11 @@ def update_posterior_states_vfe(
         # TODO: past_actions can be None
         if past_actions is not None:
             nf = len(B)
-            actions_tree = [past_actions[:, i] for i in range(nf)]
+            actions_tree = [past_actions[:, i] for i in range(nf)] #過去とった行動のリストを作成
             
             # move time steps to the leading axis (leftmost)
             # this assumes that a policy is always specified as the rightmost axis of Bs
-            B = jtu.tree_map(lambda b, a_idx: jnp.moveaxis(b[..., a_idx], -1, 0), B, actions_tree)
+            B = jtu.tree_map(lambda b, a_idx: jnp.moveaxis(b[..., a_idx], -1, 0), B, actions_tree) #過去とった行動に対応するB行列のリストを作成．
         else:
             B = None
 
@@ -148,6 +148,7 @@ def update_posterior_states_vfe(
         if method == 'vmp':
             qs = run_vmp(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter) 
         if method == 'mmp':
+            #MMPにもとづき認識分布（qs）やvfeの計算
             qs, err, vfe, S_Hqs, bs, un = run_mmp_vfe(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter)#qs, err, vfe, kld, bs, un
     
     if qs_hist is not None:

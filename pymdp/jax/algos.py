@@ -392,16 +392,16 @@ def run_mmp_vfe(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=1, ta
 def update_marginals_vfe(get_messages, obs, A, B, prior, A_dependencies, B_dependencies, num_iter=1, tau=1.,):
     """" Version of marginal update that uses a sparse dependency matrix for A """
 
-    T = obs[0].shape[0]
+    T = obs[0].shape[0] #推論の時間幅を観測リストから取得
 
     """ print(T)
     if B is not None:
         print(B[0].shape[0]) """
-    ln_B = jtu.tree_map(log_stable, B)
+    ln_B = jtu.tree_map(log_stable, B) #BのリストからlnBを計算しリスト化
     # log likelihoods -> $\ln(A)$ for all time steps
     # for $k > t$ we have $\ln(A) = 0$
 
-    def get_log_likelihood(obs_t, A):
+    def get_log_likelihood(obs_t, A): #lnA^To（尤度の対数）を計算
        # # mapping over batch dimension
        # return vmap(compute_log_likelihood_per_modality)(obs_t, A)
        return compute_log_likelihood_per_modality(obs_t, A)
@@ -410,21 +410,21 @@ def update_marginals_vfe(get_messages, obs, A, B, prior, A_dependencies, B_depen
     log_likelihoods = vmap(get_log_likelihood, (0, None))(obs, A) # this gives a sequence of log-likelihoods (one for each `t`)
     #print(prior[0].shape)
     # log marginals -> $\ln(q(s_t))$ for all time steps and factors
-    ln_qs = jtu.tree_map( lambda p: jnp.broadcast_to(jnp.zeros_like(p), (T,) + p.shape), prior)
+    ln_qs = jtu.tree_map( lambda p: jnp.broadcast_to(jnp.zeros_like(p), (T,) + p.shape), prior)#反復1回目の認識分布の対数を0ベクトルで作成．mmpではpriorはD．
     #print(ln_qs[0].shape)
 
     # log prior -> $\ln(p(s_t))$ for all factors
-    ln_prior = jtu.tree_map(log_stable, prior)
+    ln_prior = jtu.tree_map(log_stable, prior)#lnDを計算．
 
-    qs = jtu.tree_map(nn.softmax, ln_qs)
+    qs = jtu.tree_map(nn.softmax, ln_qs)#lnqsのソフトマックスを取り，反復1回目の認識分布を作成（フラットな確率分布）．
 
-    def scan_fn(carry, iter):
-        qs, err, vfe, S_Hqs, bs, un  = carry #qs, err, vfe, kld, bs, un#S_Hqs
+    def scan_fn(carry, iter):#変分更新を行うための関数．
+        qs, err, vfe, S_Hqs, bs, un  = carry #反復によりcarryに含まれるqs（認識）やvfeが更新される．#qs, err, vfe, kld, bs, un#S_Hqs
 
-        ln_qs = jtu.tree_map(log_stable, qs)
+        ln_qs = jtu.tree_map(log_stable, qs) #認識分布の対数を計算
         # messages from future $m_+(s_t)$ and past $m_-(s_t)$ for all time steps and factors. For t = T we have that $m_+(s_T) = 0$
         
-        lnB_future, lnB_past, lnB_future_for_kld = get_messages(ln_B, B, qs, ln_prior, B_dependencies)#, B_future
+        lnB_future, lnB_past, lnB_future_for_kld = get_messages(ln_B, B, qs, ln_prior, B_dependencies) #forwardメッセージ，backwardメッセージの計算．#, B_future
 
         """ def compute_expected_obs_modality(A_m, m):
             deps = A_dependencies[m]
@@ -435,19 +435,19 @@ def update_marginals_vfe(get_messages, obs, A, B, prior, A_dependencies, B_depen
         
         ##po = compute_modelevidence(po,obs)
         #mgds = jtu.Partial(mirror_gradient_descent_step, tau)
-        mgds_vfe = jtu.Partial(mirror_gradient_descent_step_vfe_kld, tau)
+        mgds_vfe = jtu.Partial(mirror_gradient_descent_step_vfe_kld, tau) #並列計算のための関数の宣言
 
-        ln_As = vmap(all_marginal_log_likelihood, in_axes=(0, 0, None))(qs, log_likelihoods, A_dependencies)
+        ln_As = vmap(all_marginal_log_likelihood, in_axes=(0, 0, None))(qs, log_likelihoods, A_dependencies) #ln（尤度成分）の計算(log_likelihoodsを他の成分と次元が一致するように足し合わせ)．観測値，観測モダリティの次元に沿って足し合わせ？
 
-        output = jtu.tree_map(mgds_vfe, ln_As, lnB_past, lnB_future, ln_qs)#lnB_future_for_kld
+        output = jtu.tree_map(mgds_vfe, ln_As, lnB_past, lnB_future, ln_qs) #vfe等情報量の計算と認識（qs）の更新． #lnB_future_for_kld
         qs, err, vfe, S_Hqs, bs, un = zip(*output) #qs, err, vfe, kld, bs, unS_Hqs
         return (list(qs), list(err), list(vfe), list(S_Hqs), list(bs), list(un)), None #(list(qs), list(err), list(vfe), list(kld), list(bs), list(un))S_Hqs, None
-    err = qs
+    err = qs#初期入力を作成．形状が間違っていなければ問題なし．
     vfe = qs
     S_Hqs = qs #kld = qs
     bs = qs
     un = qs
-    output, _ = lax.scan(scan_fn, (qs, err, vfe, S_Hqs, bs, un), jnp.arange(num_iter)) #qs, err, vfe, kld, bs, unS_Hqs
+    output, _ = lax.scan(scan_fn, (qs, err, vfe, S_Hqs, bs, un), jnp.arange(num_iter)) #scan_fnを反復して行い，vfeが最小となるようにqsを変分更新．#qs, err, vfe, kld, bs, unS_Hqs
     qs, err, vfe, S_Hqs, bs, un = output #qs, err, vfe, kld, bs, unS_Hqs,po
     return qs, err, vfe, S_Hqs, bs, un #qs, err, vfe, kld, bs, unS_Hqs,po
 
@@ -455,20 +455,20 @@ def mirror_gradient_descent_step_vfe_kld(tau, ln_A, lnB_past, lnB_future, ln_qs)
     """
     u_{k+1} = u_{k} - \nabla_p F_k
     p_k = softmax(u_k)"""
-    err = ln_A - ln_qs + lnB_past + lnB_future
+    err = ln_A - ln_qs + lnB_past + lnB_future #「状態予測誤差」の計算
     #kld_tmp = ln_qs - lnB_future_for_kld
-    S_Hqs_tmp=lnB_past + lnB_future #BS+Hqs##ln_A + lnB_past + lnB_future
+    S_Hqs_tmp=lnB_past + lnB_future #情報量計算用 #BS+Hqs##ln_A + lnB_past + lnB_future
     bs_tmp = lnB_past + lnB_future - ln_qs
     un_tmp = ln_A
     #prior = nn.softmax(lnB_future_for_kld - lnB_future_for_kld.mean(axis=-1, keepdims=True))
-    ln_qs = ln_qs + tau * err
-    qs = nn.softmax(ln_qs - ln_qs.mean(axis=-1, keepdims=True))
+    ln_qs = ln_qs + tau * err #認識分布の更新，err=-dF/dqs
+    qs = nn.softmax(ln_qs - ln_qs.mean(axis=-1, keepdims=True)) #lnqsのソフトマックスを取りqsを計算．
 
     S_Hqs = -1 * jnp.multiply(qs, S_Hqs_tmp)
     #kld = -1 * jnp.multiply(prior, kld_tmp)
     bs = -1 * jnp.multiply(qs, bs_tmp)
     un = -1 * jnp.multiply(qs, un_tmp)
-    vfe = -1 * jnp.multiply(qs, err)
+    vfe = -1 * jnp.multiply(qs, err) #vfeの計算
     return qs, err, vfe, S_Hqs, bs, un #qs, err, vfe, kld, bs, un
 
 def get_mmp_messages_kld(ln_B, B, qs, ln_prior, B_deps):

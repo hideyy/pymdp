@@ -500,7 +500,7 @@ def update_posterior_policies_inductive_efe(policy_matrix, qs_init, A, B, C, E, 
 
     # policies needs to be an NDarray of shape (n_policies, n_timepoints, n_control_factors)
     #neg_efe_all_policies = vmap(compute_G_fixed_states)(policy_matrix)
-
+    #⇓ポリシーの分布の計算q(π)=softmax(-γG+E)
     return nn.softmax(gamma * neg_efe_all_policies + log_stable(E)), neg_efe_all_policies, PBS_a_p, PKLD_a_p, PFE_a_p, oRisk_a_p, PBS_pA_a_p, PBS_pB_a_p
 
 def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_dependencies, I, policy_i, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=False):
@@ -514,9 +514,9 @@ def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_d
         #qs, neg_G = carry
         qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,utility, inductive_value = carry
 
-        qs_next = compute_expected_state(qs, B, policy_i[t], B_dependencies)
+        qs_next = compute_expected_state(qs, B, policy_i[t], B_dependencies) #q(s|π)=p(sτ+1|sτ,π)stの計算.stは認識分布
 
-        qo = compute_expected_obs(qs_next, A, A_dependencies)
+        qo = compute_expected_obs(qs_next, A, A_dependencies) #q(o|π)=p(o|s)p(sτ+1|sτ,π)stの計算
 
         info_gain += compute_info_gain(qs_next, qo, A, A_dependencies) if use_states_info_gain else 0.#compute_predicted_KLD(qs_next, qo, A, A_dependencies)
 
@@ -556,6 +556,7 @@ def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_d
     param_info_gainB = 0.
     utility=0.
     inductive_value=0.
+    #ポリシーの深さ分scan_bodyを反復
     final_state, _ = lax.scan(scan_body, (qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value), jnp.arange(policy_i.shape[0]))
     _, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value = final_state
     #print(info_gain)

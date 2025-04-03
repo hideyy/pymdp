@@ -520,7 +520,7 @@ class Agent(Module):
             at timepoint ``t_idx``.
         """
         if not self.onehot_obs:
-            o_vec = [nn.one_hot(o, self.num_obs[m]) for m, o in enumerate(observations)]
+            o_vec = [nn.one_hot(o, self.num_obs[m]) for m, o in enumerate(observations)]#観測値のワンホットベクトル化
         else:
             o_vec = observations
         
@@ -536,7 +536,7 @@ class Agent(Module):
             B_dependencies=self.B_dependencies,
             num_iter=self.num_iter,
             method=self.inference_algo
-        )
+        )#並列処理のための関数の宣言
         
         output, err, vfe, S_Hqs, bs, un = vmap(infer_states)(  #output, err, vfe, kld, bs, un 
             A,
@@ -545,9 +545,9 @@ class Agent(Module):
             past_actions,
             prior=empirical_prior,
             qs_hist=qs_hist
-        )
+        )#並列計算で認識分布（output）やvfeの計算
         #vfe=vfe[0].sum(2)
-        vfe=jtu.tree_map(lambda x: x.sum(2),vfe)
+        vfe=jtu.tree_map(lambda x: x.sum(2),vfe)#状態量の次元に沿ってVFEを足し上げ．
         err=jtu.tree_map(lambda x: x.sum(2),err)
         S_Hqs=jtu.tree_map(lambda x: x.sum(2),S_Hqs)
         #kld=jtu.tree_map(lambda x: x.sum(2),kld)
