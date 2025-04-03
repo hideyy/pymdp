@@ -474,3 +474,469 @@ def calc_inductive_value_t(qs, qs_next, I, epsilon=1e-3):
 #     qs_init = [jnp.ones(2)/2, jnp.ones(2)/2]
 #     neg_G_all_policies = jit(update_posterior_policies)(policy_matrix, qs_init, A, B, C)
 #     print(neg_G_all_policies)
+
+def update_posterior_policies_inductive_efe(policy_matrix, qs_init, A, B, C, E, pA, pB, A_dependencies, B_dependencies, I, gamma=16.0, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=True):
+    # policy --> n_levels_factor_f x 1
+    # factor --> n_levels_factor_f x n_policies
+    ## vmap across policies
+    compute_G_fixed_states = partial(compute_G_policy_inductive_efe, qs_init, A, B, C, pA, pB, A_dependencies, B_dependencies, I, inductive_epsilon=inductive_epsilon,
+                                     use_utility=use_utility,  use_states_info_gain=use_states_info_gain, use_param_info_gain=use_param_info_gain, use_inductive=use_inductive)
+
+    # policies needs to be an NDarray of shape (n_policies, n_timepoints, n_control_factors)
+    results = vmap(compute_G_fixed_states)(policy_matrix)
+    
+    
+    neg_efe_all_policies = results[0]  # 各ポリシーの負の期待自由エネルギー
+    PBS_a_p = results[1]  # 状態情報利得
+    PKLD_a_p = results[2]  # 状態情報利得
+    PFE_a_p = results[3]  # 状態情報利得
+    oRisk_a_p = results[4]  # 状態情報利得
+    PBS_pA_a_p = results[5]  # パラメータAに関する情報利得
+    PBS_pB_a_p = results[6]  # パラメータBに関する情報利得
+    #print(PBS_a_p)
+    # only in the case of policy-dependent qs_inits
+    # in_axes_list = (1,) * n_factors
+    # all_efe_of_policies = vmap(compute_G_policy, in_axes=(in_axes_list, 0))(qs_init_pi, policy_matrix)
+
+    # policies needs to be an NDarray of shape (n_policies, n_timepoints, n_control_factors)
+    #neg_efe_all_policies = vmap(compute_G_fixed_states)(policy_matrix)
+
+    return nn.softmax(gamma * neg_efe_all_policies + log_stable(E)), neg_efe_all_policies, PBS_a_p, PKLD_a_p, PFE_a_p, oRisk_a_p, PBS_pA_a_p, PBS_pB_a_p
+
+def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_dependencies, I, policy_i, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=False):
+    """ 
+    Write a version of compute_G_policy that does the same computations as `compute_G_policy` but using `lax.scan` instead of a for loop.
+    This one further adds computations used for inductive planning.
+    """
+
+    def scan_body(carry, t):
+
+        #qs, neg_G = carry
+        qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,utility, inductive_value = carry
+
+        qs_next = compute_expected_state(qs, B, policy_i[t], B_dependencies)
+
+        qo = compute_expected_obs(qs_next, A, A_dependencies)
+
+        info_gain += compute_info_gain(qs_next, qo, A, A_dependencies) if use_states_info_gain else 0.#compute_predicted_KLD(qs_next, qo, A, A_dependencies)
+
+        predicted_KLD += compute_predicted_KLD(qs_next, qo, A, A_dependencies) 
+        #print("PFE")
+        predicted_F += compute_predicted_free_energy(qs_next, qo, A, A_dependencies) 
+        #print("Risk")
+        oRisk += compute_oRisk(t, qo, C)
+        utility += compute_expected_utility(t, qo, C) if use_utility else 0.
+
+        inductive_value += calc_inductive_value_t(qs_init, qs_next, I, epsilon=inductive_epsilon) if use_inductive else 0.
+
+        if pA is not None:
+            param_info_gainA -= calc_pA_info_gain(pA, qo, qs_next, A_dependencies) if use_param_info_gain else 0.
+        else:
+            param_info_gainA = 0.
+        if pB is not None:
+            param_info_gainB -= calc_pB_info_gain(pB, qs_next, qs, B_dependencies, policy_i[t]) if use_param_info_gain else 0.
+        else:
+            param_info_gainB = 0.
+
+        #neg_G = info_gain + param_info_gainA + param_info_gainB + inductive_value + utility
+
+        neg_G = info_gain + predicted_KLD - predicted_F - oRisk + param_info_gainA + param_info_gainB + inductive_value
+        #neg_G += inductive_value 
+        return (qs_next, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value), None
+
+    qs = qs_init
+    #print(qs)
+    #print(policy_i)
+    neg_G = 0.
+    info_gain = 0.
+    predicted_KLD = 0.
+    predicted_F = 0.
+    oRisk = 0.
+    param_info_gainA = 0.
+    param_info_gainB = 0.
+    utility=0.
+    inductive_value=0.
+    final_state, _ = lax.scan(scan_body, (qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value), jnp.arange(policy_i.shape[0]))
+    _, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value = final_state
+    #print(info_gain)
+    #print(predicted_KLD)
+    """print(predicted_F)
+    print(oRisk)
+    print(param_info_gainA)
+    print(param_info_gainB)
+
+    print(inductive_value) """
+    #print(neg_G)
+    return neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB
+
+def compute_predicted_KLD(qs, qo, A, A_dependencies):
+    
+    #print("qs:", qs)
+    #print("qo:", qo)
+    #print("A:", A)
+    #print("A_dependencies:", A_dependencies)
+    def compute_pKLD_for_modality(qo_m, A_m, m):
+        H_qo = stable_entropy(qo_m)
+        deps = A_dependencies[m]
+        relevant_factors = [qs[idx] for idx in deps]
+        #relevant_factors = [jnp.array(qs[idx]) for idx in deps]
+        #print("qo_ln_A_m")
+        #qs_next_f = factor_dot(B_f[...,u_f], relevant_factors, keep_dims=(0,))
+        """ 
+        relevant_factors = jnp.array([qs[idx] for idx in deps])
+        qs_ln_A_m = - stable_cross_entropy(relevant_factors,A_m)
+        #print("qo_qs_ln_A_m")
+        qo_qs_ln_A_m = -(qo_m * qs_ln_A_m).sum() """
+        #qo_ln_A_m = - stable_cross_entropy(qo_m,A_m)
+        #log_A_m = jnp.log(A_m)
+        log_A_m = log_stable(A_m)
+        #print(log_A_m)
+        #print(qo_m)
+        #qo_ln_A_m =-(qo_m * log_A_m).sum(0)
+        qo_ln_A_m = -(jnp.expand_dims(qo_m, axis=tuple(range(1, log_A_m.ndim))) * log_A_m).sum(0)
+        #qo_ln_A_m = jnp.einsum('i,ijklm->jklm', qo_m, log_A_m)
+        
+        #qo_ln_A_m = - factor_dot(log_A_m, qo_m)
+        #print("qo_qs_ln_A_m")
+        #print(qo_ln_A_m)
+        #qo_qs_ln_A_m = -(qo_m * qs_ln_A_m).sum()
+        #print(relevant_factors)
+        qo_qs_ln_A_m = factor_dot(qo_ln_A_m, relevant_factors)
+        #print(qo_qs_ln_A_m - H_qo)
+        #qo_qs_ln_A_m = factor_dot(qs_ln_A_m, qo_m)
+        
+        
+        #qo_qs_ln_A_m = factor_dot(H_A_m, relevant_factors)
+        return qo_qs_ln_A_m - H_qo
+        """ def compute_info_gain(qs, qo, A, A_dependencies):
+            
+
+            def compute_info_gain_for_modality(qo_m, A_m, m):
+                H_qo = stable_entropy(qo_m)
+                H_A_m = - stable_xlogx(A_m).sum(0)
+                deps = A_dependencies[m]
+                relevant_factors = [qs[idx] for idx in deps]
+                qs_H_A_m = factor_dot(H_A_m, relevant_factors)
+                return H_qo - qs_H_A_m
+            
+            info_gains_per_modality = jtu.tree_map(compute_info_gain_for_modality, qo, A, list(range(len(A))))
+                
+            return jtu.tree_reduce(lambda x,y: x+y, info_gains_per_modality) """
+    
+    pKLD_per_modality = jtu.tree_map(compute_pKLD_for_modality, qo, A, list(range(len(A))))
+        
+    return jtu.tree_reduce(lambda x,y: x+y, pKLD_per_modality)
+
+def compute_predicted_free_energy(qs, qo, A, A_dependencies):
+    
+
+    def compute_pF_for_modality(qo_m, A_m, m):
+        #H_qo = stable_entropy(qo_m)
+        """ deps = A_dependencies[m]
+        relevant_factors = jnp.array([qs[idx] for idx in deps])
+        
+        qs_ln_A_m = - stable_cross_entropy(relevant_factors,A_m)
+        
+        qo_qs_ln_A_m = -(qo_m * qs_ln_A_m).sum()
+        #qo_qs_ln_A_m = factor_dot(H_A_m, relevant_factors) """
+        deps = A_dependencies[m]
+        relevant_factors = [qs[idx] for idx in deps]
+        log_A_m = log_stable(A_m)
+        qo_ln_A_m = -(jnp.expand_dims(qo_m, axis=tuple(range(1, log_A_m.ndim))) * log_A_m).sum(0)
+        qo_qs_ln_A_m = factor_dot(qo_ln_A_m, relevant_factors)
+        #qo_qs_ln_A_m = factor_dot(qs_ln_A_m, qo_m)
+        #print(qo_qs_ln_A_m)
+        return qo_qs_ln_A_m #- H_qo
+    
+    pF_per_modality = jtu.tree_map(compute_pF_for_modality, qo, A, list(range(len(A))))
+        
+    return jtu.tree_reduce(lambda x,y: x+y, pF_per_modality)
+
+def compute_oRisk(t, qo, C):
+    def compute_expected_entropy_for_modality(qo_m):
+        H_qo = stable_entropy(qo_m)
+        return H_qo
+    oRisk = 0.
+    for o_m, C_m in zip(qo, C):
+        if C_m.ndim > 1:
+            oRisk -= (o_m * C_m[t]).sum()
+        else:
+            oRisk -= (o_m * C_m).sum()
+    Entropy_per_modality = jtu.tree_map(compute_expected_entropy_for_modality, qo)
+    H_qo_all=jtu.tree_reduce(lambda x,y: x+y, Entropy_per_modality)#-Σqolnqo
+    oRisk-=H_qo_all#Σqolnqo##-=
+    return oRisk
+
+def sample_policy_idx(policies, q_pi, action_selection="deterministic", alpha = 16.0, rng_key=None):
+
+    if action_selection == "deterministic":
+        policy_idx = jnp.argmax(q_pi)
+    elif action_selection == "stochastic":
+        log_p_policies = log_stable(q_pi) * alpha
+        policy_idx = jr.categorical(rng_key, log_p_policies)
+
+    selected_multiaction = policies[policy_idx, 0]
+    return selected_multiaction, policy_idx
+
+#for infer_policies_detail
+def compute_G_policy_inductive_detail(qs_init, A, B, C, pA, pB, A_dependencies, B_dependencies, I, policy_i, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=False):
+    """ 
+    Write a version of compute_G_policy that does the same computations as `compute_G_policy` but using `lax.scan` instead of a for loop.
+    This one further adds computations used for inductive planning.
+    """
+
+    def scan_body(carry, t):
+
+        qs, neg_G, G_info = carry
+
+        qs_next = compute_expected_state(qs, B, policy_i[t], B_dependencies)
+
+        qo = compute_expected_obs(qs_next, A, A_dependencies)
+
+        info_gain = compute_info_gain(qs_next, qo, A, A_dependencies) if use_states_info_gain else 0.
+
+        utility = compute_expected_utility(t, qo, C) if use_utility else 0.
+
+        inductive_value = calc_inductive_value_t(qs_init, qs_next, I, epsilon=inductive_epsilon) if use_inductive else 0.
+
+        pA_info_gain = 0.
+        pB_info_gain = 0.
+        if pA is not None:
+            pA_info_gain = calc_pA_info_gain(pA, qo, qs_next, A_dependencies) if use_param_info_gain else 0.
+        if pB is not None:
+            pB_info_gain = calc_pB_info_gain(pB, qs_next, qs, B_dependencies, policy_i[t]) if use_param_info_gain else 0.
+
+        neg_G += info_gain + utility - (pA_info_gain + pB_info_gain) + inductive_value
+
+        G_info = {"state_info_gain":info_gain, "utility":utility, "pA_info_gain":pA_info_gain, "pB_info_gain":pB_info_gain, "inductive_value":inductive_value}
+
+        return (qs_next, neg_G, G_info), None
+
+    qs = qs_init
+    neg_G = 0.
+    info ={"state_info_gain":0., "utility":0., "pA_info_gain":0., "pB_info_gain":0., "inductive_value":0.}
+    final_state, _ = lax.scan(scan_body, (qs, neg_G, info), jnp.arange(policy_i.shape[0]))
+    _, neg_G, info = final_state
+    return neg_G, info
+
+def update_posterior_policies_inductive_detail(policy_matrix, qs_init, A, B, C, E, pA, pB, A_dependencies, B_dependencies, I, gamma=16.0, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=True):
+    # policy --> n_levels_factor_f x 1
+    # factor --> n_levels_factor_f x n_policies
+    ## vmap across policies
+    compute_G_fixed_states = partial(compute_G_policy_inductive_detail, qs_init, A, B, C, pA, pB, A_dependencies, B_dependencies, I, inductive_epsilon=inductive_epsilon,
+                                     use_utility=use_utility,  use_states_info_gain=use_states_info_gain, use_param_info_gain=use_param_info_gain, use_inductive=use_inductive)
+
+    # only in the case of policy-dependent qs_inits
+    # in_axes_list = (1,) * n_factors
+    # all_efe_of_policies = vmap(compute_G_policy, in_axes=(in_axes_list, 0))(qs_init_pi, policy_matrix)
+
+    # policies needs to be an NDarray of shape (n_policies, n_timepoints, n_control_factors)
+    neg_efe_all_policies, info = vmap(compute_G_fixed_states)(policy_matrix)
+
+    return nn.softmax(gamma * neg_efe_all_policies + log_stable(E)), neg_efe_all_policies, info
+
+def update_posterior_policies_inductive_efe_qs_pi(policy_matrix, qs_init_pi, A, B, C, E, pA, pB, A_dependencies, B_dependencies, I, gamma=16.0, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=True):
+    # policy --> n_levels_factor_f x 1
+    # factor --> n_levels_factor_f x n_policies
+    """ print(qs_init_pi)
+    print(policy_matrix) """
+    ## vmap across policies
+    compute_G_fixed_states = partial(compute_G_policy_inductive_efe_qs_pi, A, B, C, pA, pB, A_dependencies, B_dependencies, I, inductive_epsilon=inductive_epsilon,
+                                     use_utility=use_utility,  use_states_info_gain=use_states_info_gain, use_param_info_gain=use_param_info_gain, use_inductive=use_inductive)
+
+    # policies needs to be an NDarray of shape (n_policies, n_timepoints, n_control_factors)
+    
+    #vmapmatrix=jtu.tree_map(lambda x,y:(x,list(y)),qs_init_pi, list(policy_matrix))
+    #results = vmap(compute_G_fixed_states)(vmapmatrix)
+    results = vmap(compute_G_fixed_states)(jnp.array(qs_init_pi),policy_matrix)
+    
+    neg_efe_all_policies = results[0]  # 各ポリシーの負の期待自由エネルギー
+    PBS_a_p = results[1]  # 状態情報利得
+    PKLD_a_p = results[2]  # 状態情報利得
+    PFE_a_p = results[3]  # 状態情報利得
+    oRisk_a_p = results[4]  # 状態情報利得
+    PBS_pA_a_p = results[5]  # パラメータAに関する情報利得
+    PBS_pB_a_p = results[6]  # パラメータBに関する情報利得
+    # only in the case of policy-dependent qs_inits
+    # in_axes_list = (1,) * n_factors
+    # all_efe_of_policies = vmap(compute_G_policy, in_axes=(in_axes_list, 0))(qs_init_pi, policy_matrix)
+
+    # policies needs to be an NDarray of shape (n_policies, n_timepoints, n_control_factors)
+    #neg_efe_all_policies = vmap(compute_G_fixed_states)(policy_matrix)
+
+    return nn.softmax(gamma * neg_efe_all_policies + log_stable(E)), neg_efe_all_policies, PBS_a_p, PKLD_a_p, PFE_a_p, oRisk_a_p, PBS_pA_a_p, PBS_pB_a_p
+
+def compute_G_policy_inductive_efe_qs_pi( A, B, C, pA, pB, A_dependencies, B_dependencies, I, qs_init, policy_i, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=False):
+    """ 
+    Write a version of compute_G_policy that does the same computations as `compute_G_policy` but using `lax.scan` instead of a for loop.
+    This one further adds computations used for inductive planning.
+    """
+    def scan_body(carry, t):
+
+        #qs, neg_G = carry
+        #qsはループごとに更新するのではなくqs_initを参照
+        neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,inductive_value = carry#qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,inductive_value = carry
+        qs = jtu.tree_map(lambda x: x[:,t,:],qs_init)
+        qs =list(qs)
+        #qs = [x[:, t] if x.ndim == 2 else x[:, t, :] for x in qs_init]
+        qs_next = jtu.tree_map(lambda x: x[:,t+1,:],qs_init)#qs_initはポリシーの長さ分の未来の状態に対する信念，agent.pyで処理する場合と異なりbatchsizeの次元がない？
+        qs_next =list(qs_next)
+        #print(qs_next)
+        #qs_next = compute_expected_state(qs, B, policy_i[t], B_dependencies)
+
+        qo = compute_expected_obs(qs_next, A, A_dependencies)
+
+        info_gain += compute_info_gain(qs_next, qo, A, A_dependencies) if use_states_info_gain else 0.
+
+        predicted_KLD += compute_predicted_KLD(qs_next, qo, A, A_dependencies) 
+        #print("PFE")
+        predicted_F += compute_predicted_free_energy(qs_next, qo, A, A_dependencies) 
+        #print("Risk")
+        oRisk += compute_oRisk(t, qo, C)
+        #utility = compute_expected_utility(t, qo, C) if use_utility else 0.
+
+        inductive_value += calc_inductive_value_t(qs_init, qs_next, I, epsilon=inductive_epsilon) if use_inductive else 0.
+
+        
+        
+        if pA is not None:
+            param_info_gainA -= calc_pA_info_gain(pA, qo, qs_next, A_dependencies) if use_param_info_gain else 0.
+        else:
+            param_info_gainA = 0.
+        if pB is not None:
+            param_info_gainB -= calc_pB_info_gain(pB, qs_next, qs, B_dependencies, policy_i[t]) if use_param_info_gain else 0.
+        else:
+            param_info_gainB = 0.
+
+        #neg_G = info_gain - param_info_gainA - param_info_gainB + inductive_value
+
+        neg_G = info_gain + predicted_KLD - predicted_F - oRisk + param_info_gainA + param_info_gainB + inductive_value
+        #neg_G += inductive_value + utility 
+        return (neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,inductive_value), None#(jnp.array(qs_next), neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,inductive_value), None
+
+    #qs = qs_init
+    #print(qs)
+    #print(policy_i)
+    neg_G = 0.
+    info_gain = 0.
+    predicted_KLD = 0.
+    predicted_F = 0.
+    oRisk = 0.
+    param_info_gainA = 0.
+    param_info_gainB = 0.
+    inductive_value = 0.
+    final_state, _ = lax.scan(scan_body, (neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,inductive_value), jnp.arange(policy_i.shape[0]))
+    #final_state, _ = lax.scan(scan_body, (qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,inductive_value), jnp.arange(policy_i.shape[0]))
+    neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, inductive_value = final_state
+    return neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB
+
+def compute_expected_state_obs(qs_prior, A, B, u_t, A_dependencies, B_dependencies=None): 
+    """
+    Compute posterior over next state, given belief about previous state, transition model and action...
+    """
+    #Note: this algorithm is only correct if each factor depends only on itself. For any interactions, 
+    # we will have empirical priors with codependent factors. 
+    assert len(u_t) == len(B)  
+    qs_next = []
+    for B_f, u_f, deps in zip(B, u_t, B_dependencies):
+        relevant_factors = [qs_prior[idx] for idx in deps]
+        qs_next_f = factor_dot(B_f[...,u_f], relevant_factors, keep_dims=(0,))
+        qs_next.append(qs_next_f)
+        
+    # P(s'|s, u) = \sum_{s, u} P(s'|s) P(s|u) P(u|pi)P(pi) because u </-> pi
+        
+    def compute_expected_obs_modality(A_m, m):
+        deps = A_dependencies[m]
+        relevant_factors = [qs_next[idx] for idx in deps]
+        return factor_dot(A_m, relevant_factors, keep_dims=(0,))
+
+    return qs_next,jtu.tree_map(compute_expected_obs_modality, A, list(range(len(A))))
+
+def update_posterior_policies_inductive_efe_qs_pi_old(policy_matrix, qs_init_pi, A, B, C, E, pA, pB, A_dependencies, B_dependencies, I, gamma=16.0, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=True):
+    # policy --> n_levels_factor_f x 1
+    # factor --> n_levels_factor_f x n_policies
+    """ print(qs_init_pi)
+    print(policy_matrix) """
+    ## vmap across policies
+    compute_G_fixed_states = partial(compute_G_policy_inductive_efe_qs_pi_old, A, B, C, pA, pB, A_dependencies, B_dependencies, I, inductive_epsilon=inductive_epsilon,
+                                     use_utility=use_utility,  use_states_info_gain=use_states_info_gain, use_param_info_gain=use_param_info_gain, use_inductive=use_inductive)
+
+    # policies needs to be an NDarray of shape (n_policies, n_timepoints, n_control_factors)
+    
+    #vmapmatrix=jtu.tree_map(lambda x,y:(x,list(y)),qs_init_pi, list(policy_matrix))
+    #results = vmap(compute_G_fixed_states)(vmapmatrix)
+    results = vmap(compute_G_fixed_states)(jnp.array(qs_init_pi),policy_matrix)
+    
+    neg_efe_all_policies = results[0]  # 各ポリシーの負の期待自由エネルギー
+    PBS_a_p = results[1]  # 状態情報利得
+    PKLD_a_p = results[2]  # 状態情報利得
+    PFE_a_p = results[3]  # 状態情報利得
+    oRisk_a_p = results[4]  # 状態情報利得
+    PBS_pA_a_p = results[5]  # パラメータAに関する情報利得
+    PBS_pB_a_p = results[6]  # パラメータBに関する情報利得
+    # only in the case of policy-dependent qs_inits
+    # in_axes_list = (1,) * n_factors
+    # all_efe_of_policies = vmap(compute_G_policy, in_axes=(in_axes_list, 0))(qs_init_pi, policy_matrix)
+
+    # policies needs to be an NDarray of shape (n_policies, n_timepoints, n_control_factors)
+    #neg_efe_all_policies = vmap(compute_G_fixed_states)(policy_matrix)
+
+    return nn.softmax(gamma * neg_efe_all_policies + log_stable(E)), neg_efe_all_policies, PBS_a_p, PKLD_a_p, PFE_a_p, oRisk_a_p, PBS_pA_a_p, PBS_pB_a_p
+
+def compute_G_policy_inductive_efe_qs_pi_old( A, B, C, pA, pB, A_dependencies, B_dependencies, I, qs_init, policy_i, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=False):
+    """ 
+    Write a version of compute_G_policy that does the same computations as `compute_G_policy` but using `lax.scan` instead of a for loop.
+    This one further adds computations used for inductive planning.
+    """
+
+    def scan_body(carry, t):
+
+        #qs, neg_G = carry
+        qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,inductive_value = carry
+
+        qs_next = compute_expected_state(qs, B, policy_i[t], B_dependencies)
+
+        qo = compute_expected_obs(qs_next, A, A_dependencies)
+
+        info_gain += compute_info_gain(qs_next, qo, A, A_dependencies) if use_states_info_gain else 0.
+
+        predicted_KLD += compute_predicted_KLD(qs_next, qo, A, A_dependencies) 
+        #print("PFE")
+        predicted_F += compute_predicted_free_energy(qs_next, qo, A, A_dependencies) 
+        #print("Risk")
+        oRisk += compute_oRisk(t, qo, C)
+        #utility = compute_expected_utility(t, qo, C) if use_utility else 0.
+
+        inductive_value += calc_inductive_value_t(qs_init, qs_next, I, epsilon=inductive_epsilon) if use_inductive else 0.
+        print(qs_next)
+        
+        
+        if pA is not None:
+            param_info_gainA -= calc_pA_info_gain(pA, qo, qs_next, A_dependencies) if use_param_info_gain else 0.
+        else:
+            param_info_gainA = 0.
+        if pB is not None:
+            param_info_gainB -= calc_pB_info_gain(pB, qs_next, qs, B_dependencies, policy_i[t]) if use_param_info_gain else 0.
+        else:
+            param_info_gainB = 0.
+
+        #neg_G = info_gain - param_info_gainA - param_info_gainB + inductive_value
+
+        neg_G = info_gain + predicted_KLD - predicted_F - oRisk + param_info_gainA + param_info_gainB + inductive_value
+        #neg_G += inductive_value + utility 
+        return (jnp.array(qs_next), neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,inductive_value), None
+
+    qs = qs_init
+    #print(qs)
+    #print(policy_i)
+    neg_G = 0.
+    info_gain = 0.
+    predicted_KLD = 0.
+    predicted_F = 0.
+    oRisk = 0.
+    param_info_gainA = 0.
+    param_info_gainB = 0.
+    inductive_value = 0.
+    final_state, _ = lax.scan(scan_body, (qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,inductive_value), jnp.arange(policy_i.shape[0]))
+    _, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, inductive_value = final_state
+    return neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB

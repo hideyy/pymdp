@@ -18,6 +18,8 @@ from typing import List, Optional
 from jaxtyping import Array
 from functools import partial
 
+from pymdp.maths import *
+
 class Agent(Module):
     """ 
     The Agent class, the highest-level API that wraps together processes for action, perception, and learning under active inference.
@@ -494,3 +496,944 @@ class Agent(Module):
             raise NotImplementedError("CV is not implemented")
 
         return default_params
+    
+    def infer_states_vfe(self, observations, empirical_prior, *, past_actions=None, qs_hist=None, mask=None):
+        """
+        Update approximate posterior over hidden states by solving variational inference problem, given an observation.
+
+        Parameters
+        ----------
+        observations: ``list`` or ``tuple`` of ints
+            The observation input. Each entry ``observation[m]`` stores one-hot vectors representing the observations for modality ``m``.
+        past_actions: ``list`` or ``tuple`` of ints
+            The action input. Each entry ``past_actions[f]`` stores indices (or one-hots?) representing the actions for control factor ``f``.
+        empirical_prior: ``list`` or ``tuple`` of ``jax.numpy.ndarray`` of dtype object
+            Empirical prior beliefs over hidden states. Depending on the inference algorithm chosen, the resulting ``empirical_prior`` variable may be a matrix (or list of matrices) 
+            of additional dimensions to encode extra conditioning variables like timepoint and policy.
+        Returns
+        ---------
+        qs: ``numpy.ndarray`` of dtype object
+            Posterior beliefs over hidden states. Depending on the inference algorithm chosen, the resulting ``qs`` variable will have additional sub-structure to reflect whether
+            beliefs are additionally conditioned on timepoint and policy.
+            For example, in case the ``self.inference_algo == 'MMP' `` indexing structure is policy->timepoint-->factor, so that 
+            ``qs[p_idx][t_idx][f_idx]`` refers to beliefs about marginal factor ``f_idx`` expected under policy ``p_idx`` 
+            at timepoint ``t_idx``.
+        """
+        if not self.onehot_obs:
+            o_vec = [nn.one_hot(o, self.num_obs[m]) for m, o in enumerate(observations)]
+        else:
+            o_vec = observations
+        
+        A = self.A
+        if mask is not None:
+            for i, m in enumerate(mask):
+                o_vec[i] = m * o_vec[i] + (1 - m) * jnp.ones_like(o_vec[i]) / self.num_obs[i]
+                A[i] = m * A[i] + (1 - m) * jnp.ones_like(A[i]) / self.num_obs[i]
+
+        infer_states = partial(
+            inference.update_posterior_states_vfe,
+            A_dependencies=self.A_dependencies,
+            B_dependencies=self.B_dependencies,
+            num_iter=self.num_iter,
+            method=self.inference_algo
+        )
+        
+        output, err, vfe, S_Hqs, bs, un = vmap(infer_states)(  #output, err, vfe, kld, bs, un 
+            A,
+            self.B,
+            o_vec,
+            past_actions,
+            prior=empirical_prior,
+            qs_hist=qs_hist
+        )
+        #vfe=vfe[0].sum(2)
+        vfe=jtu.tree_map(lambda x: x.sum(2),vfe)
+        err=jtu.tree_map(lambda x: x.sum(2),err)
+        S_Hqs=jtu.tree_map(lambda x: x.sum(2),S_Hqs)
+        #kld=jtu.tree_map(lambda x: x.sum(2),kld)
+        bs=jtu.tree_map(lambda x: x.sum(2),bs)
+        un=jtu.tree_map(lambda x: x.sum(2),un)
+
+        return output, err, vfe, S_Hqs, bs, un#output, err, vfe, kld(S_Hqs)(po), bs, un
+    
+    #@vmap
+    def calc_KLD_past_currentqs(self, empirical_prior, past_qs, current_qs):
+        """
+        認識によって減少する自由エネルギーを計算．mmpを想定．
+        t:現在のタイムステップ
+        empirical_prior:t-1におけるtの状態に対する予測,t-1におけるupdate_empirical_priorの出力pred
+        past_qs:t-1におけるt-1までの状態に関する信念,t-1におけるupdate_empirical_priorの出力qs
+        current_qs:tにおけるtまでの状態に関する信念,tにおけるinfer_statesの出力qs_hist
+        D_KL([past_qs, prior]|current_qs)を計算．
+        """
+        #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate([x, y[None, ...]], axis=1), past_qs, empirical_prior)
+        #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate([x, y], axis=1), past_qs, empirical_prior)
+        #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate([x, y[:, None, :]], axis=1), past_qs, empirical_prior)
+        
+        if past_qs is not None:
+            #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate([x, y], axis=1), past_qs, jnp.expand_dims(empirical_prior, axis=1))
+
+            #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate([x, y[None, ...]], axis=1), past_qs, empirical_prior)
+            
+            #past_beliefs = jnp.concatenate((past_qs, empirical_prior), axis=1)
+            #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate([x, y], axis=1), past_qs, empirical_prior)
+            #empirical_prior = jnp.array(empirical_prior)
+            #print("combart")
+            empirical_prior = jtu.tree_map(lambda x: x[None, ...], empirical_prior) # 2次元配列を3次元配列に変換
+            #print("combine")
+            past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate((x, y), axis=1), past_qs, empirical_prior)
+            #past_beliefs = jnp.concatenate((past_qs, empirical_prior), axis=1)
+            #print(past_beliefs[0].shape)
+            #print(current_qs[0].shape)
+        else:
+            past_beliefs = empirical_prior
+        #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate([x, jnp.expand_dims(jnp.array(y), axis=1)], axis=1), past_qs, empirical_prior)
+        #past_beliefs = jtu.tree_map(lambda x: x.squeeze(axis=0), past_beliefs)
+        #past_beliefs = [jnp.array([x]) for x in past_qs] + [jnp.array([y]) for y in empirical_prior]
+        #past_beliefs = past_beliefs = [jnp.array([x]) for x in past_qs] + [jnp.array([y]) for y in empirical_prior]
+        #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate([x, y[None, ...]], axis=0), past_qs, empirical_prior)
+        #H_past_beliefs = xlogy(current_qs,current_qs).sum()
+        #H_past_beliefs = xlogy(past_beliefs,past_beliefs).sum()
+        #past_beliefs_lncurrent_qs = xlogy(past_beliefs, current_qs).sum()
+        #kld = H_past_beliefs #- past_beliefs_lncurrent_qs
+
+        #kld = inference.calc_KLD(past_beliefs,current_qs)
+        #print("calculate")
+        kld = inference.calc_KLD(past_beliefs,current_qs)
+        return kld
+    
+    def infer_policies_efe(self, qs: List):
+        """
+        Perform policy inference by optimizing a posterior (categorical) distribution over policies.
+        This distribution is computed as the softmax of ``G * gamma + lnE`` where ``G`` is the negative expected
+        free energy of policies, ``gamma`` is a policy precision and ``lnE`` is the (log) prior probability of policies.
+        This function returns the posterior over policies as well as the negative expected free energy of each policy.
+
+        Returns
+        ----------
+        q_pi: 1D ``numpy.ndarray``
+            Posterior beliefs over policies, i.e. a vector containing one posterior probability per policy.
+        G: 1D ``numpy.ndarray``
+            Negative expected free energies of each policy, i.e. a vector containing one negative expected free energy per policy.
+        """
+
+        latest_belief = jtu.tree_map(lambda x: x[:, -1], qs) # only get the posterior belief held at the current timepoint
+        infer_policies = partial(
+            control.update_posterior_policies_inductive_efe,
+            self.policies,
+            A_dependencies=self.A_dependencies,
+            B_dependencies=self.B_dependencies,
+            use_utility=self.use_utility,
+            use_states_info_gain=self.use_states_info_gain,
+            use_param_info_gain=self.use_param_info_gain,
+            use_inductive=self.use_inductive
+        )
+
+        q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB = vmap(infer_policies)(
+            latest_belief, 
+            self.A,
+            self.B,
+            self.C,
+            self.E,
+            self.pA,
+            self.pB,
+            I = self.I,
+            gamma=self.gamma,
+            inductive_epsilon=self.inductive_epsilon
+        )
+        #print(PBS)
+        return q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB
+    
+    def infer_states_vfe_policies(self, observations, empirical_prior, *, past_actions=None, qs_hist=None, mask=None):
+        """
+        Update approximate posterior over hidden states by solving variational inference problem, given an observation.
+
+        Parameters
+        ----------
+        observations: ``list`` or ``tuple`` of ints
+            The observation input. Each entry ``observation[m]`` stores one-hot vectors representing the observations for modality ``m``.
+        past_actions: ``list`` or ``tuple`` of ints
+            The action input. Each entry ``past_actions[f]`` stores indices (or one-hots?) representing the actions for control factor ``f``.
+        empirical_prior: ``list`` or ``tuple`` of ``jax.numpy.ndarray`` of dtype object
+            Empirical prior beliefs over hidden states. Depending on the inference algorithm chosen, the resulting ``empirical_prior`` variable may be a matrix (or list of matrices) 
+            of additional dimensions to encode extra conditioning variables like timepoint and policy.
+        Returns
+        ---------
+        qs: ``numpy.ndarray`` of dtype object
+            Posterior beliefs over hidden states. Depending on the inference algorithm chosen, the resulting ``qs`` variable will have additional sub-structure to reflect whether
+            beliefs are additionally conditioned on timepoint and policy.
+            For example, in case the ``self.inference_algo == 'MMP' `` indexing structure is policy->timepoint-->factor, so that 
+            ``qs[p_idx][t_idx][f_idx]`` refers to beliefs about marginal factor ``f_idx`` expected under policy ``p_idx`` 
+            at timepoint ``t_idx``.
+        """
+        if not self.onehot_obs:
+            o_vec = [nn.one_hot(o, self.num_obs[m]) for m, o in enumerate(observations)]
+        else:
+            o_vec = observations
+        
+        A = self.A
+        if mask is not None:
+            for i, m in enumerate(mask):
+                o_vec[i] = m * o_vec[i] + (1 - m) * jnp.ones_like(o_vec[i]) / self.num_obs[i]
+                A[i] = m * A[i] + (1 - m) * jnp.ones_like(A[i]) / self.num_obs[i]
+
+        
+        policies = self.policies
+        batch_size = self.batch_size ##1 # number of agents
+        policies = jtu.tree_map(lambda x: jnp.broadcast_to(x, (batch_size,) + x.shape), policies)
+        _,K, t,_= policies.shape
+        #print('t',t)
+        #print('K',K)
+        #print(past_actions.shape)
+        """ selected_policy=-1
+        if past_actions is not None:
+            #print(past_actions.shape)
+            if past_actions.shape[1]>=t:
+                 #for i in range(K):
+                    #print(past_actions[:,-t:])
+                #print(past_actions[:,-t:][0])
+                #print(policies[0][0])
+                    #if jnp.array_equal(past_actions[:,-t:][0], policies[0][i]):
+                        #selected_policy=i 
+                selected_policy = jnp.where(
+                    jnp.all(past_actions[:, -t:][0] == policies[0], axis=(1, 2)),
+                    jnp.arange(K),
+                    -1
+                ).max()
+                #print(selected_policy)
+            else:
+                selected_policy=-1
+        else:
+            selected_policy=-1 """
+        """ print('selected_policy')
+        print(selected_policy) """
+    
+        #policies = jtu.tree_map(lambda x: jnp.broadcast_to(x, (batch_size,) + x.shape), policies)
+        #print(len(policies))
+        #print(policies[0].shape)
+        """ if past_actions is not None:
+            print(len(past_actions))
+            print(past_actions[0].shape) """
+
+        infer_states_policies = partial(
+            inference.update_posterior_states_vfe_policies,
+            A_dependencies=self.A_dependencies,
+            B_dependencies=self.B_dependencies,
+            num_iter=self.num_iter,
+            method=self.inference_algo
+        )
+        
+        output, err, vfe, kld, bs, un = vmap(infer_states_policies)(#vmap(infer_states)(
+            A,
+            self.B,
+            o_vec,
+            policies,
+            past_actions,
+            prior=empirical_prior,
+            qs_hist=qs_hist
+        )
+        """ if selected_policy !=-1:
+            #output=jnp.array(output[0][selected_policyi])
+            #output = jtu.tree_map(lambda x: jnp.broadcast_to(x, (batch_size,) + x.shape), output)
+            #print(output) 
+            output = jtu.tree_map(lambda x: x[0][selected_policy], output)
+            output = output[0] """
+        #print(output)
+        # output = jnp.where(selected_policy != -1, jnp.array(jtu.tree_map(
+        #    lambda x: x[0][selected_policy],output)[0]), jnp.array(output))
+
+        #output = jtu.tree_map(lambda x: x[0][:,:-t],output)[0]
+        #print(output[0].shape)
+        """ if past_actions is not None:
+            #print(output[0])
+            #print(len(output[0]))
+            #output = jtu.tree_map(lambda x: x[:,:-t,:],output[0])#[k][?,F,t]##ポリシー０のqsを取り出す場合
+            output = jtu.tree_map(lambda y:jtu.tree_map(lambda x: x[:,:-t,:],y),output) """
+            #output = jtu.tree_map(lambda y:jtu.tree_map(lambda x: x[0][:][:-t],y),output)#K,F,t
+            #output=output[0]
+            #print(output)
+        #
+        #print(output)
+            #output=jtu.tree_map(lambda x: jnp.expand_dims(x, -1).astype(jnp.float32), output) #vfe=vfe[0].sum(2)
+        """ vfe=jtu.tree_map(lambda x: x.sum(2),vfe)
+        err=jtu.tree_map(lambda x: x.sum(2),err)
+        kld=jtu.tree_map(lambda x: x.sum(2),kld)
+        bs=jtu.tree_map(lambda x: x.sum(2),bs)
+        un=jtu.tree_map(lambda x: x.sum(2),un)
+        """
+        #vfe=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(2),x),vfe)
+        """ err=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(2),x),err)
+        kld=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(2),x),kld)
+        bs=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(2),x),bs)
+        un=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(2),x),un) """
+       
+
+        return output, err, vfe, kld, bs, un
+    
+    def infer_policies_posterior(self, neg_efe, vfe_pi, reflect_len=None):
+         #print(vfe_pi[0].shape)
+         #print(neg_efe[0].shape)
+         #vfe_pi=jtu.tree_map(lambda x:jnp.sum(x, axis=-1).flatten(),vfe_pi)
+         #vfe_pi=jnp.sum(vfe_pi[0], axis=-1).flatten()
+         #print(vfe_pi.shape)
+        #agent=self
+        if reflect_len is None:
+            reflect_len=self.policy_len
+        if vfe_pi[0].shape[0]==neg_efe[0].shape[0]:
+            print("pi posterior")
+            vfe_pi2=vfe_pi[0][:,:,-reflect_len:]
+            vfe_pi2=jnp.sum(vfe_pi2, axis=-1).flatten()
+            #vfe_pi=jnp.sum(vfe_pi[0], axis=-1).flatten()
+            q_pi=nn.softmax(self.gamma * neg_efe + log_stable(self.E) - vfe_pi2)
+        else:
+            q_pi=nn.softmax(self.gamma * neg_efe + log_stable(self.E))
+        return q_pi
+    
+    def infer_policies_precision(self, neg_efe, vfe_pi, beta=1, policy_len=None):
+        agent=self
+        if policy_len is None:
+            policy_len=self.policy_len
+        def scan_fn(carry, iter):
+            q_pi, q_pi_0, gamma, Gerror, qb=carry
+            #print(vfe_pi[0].shape)
+            #print(neg_efe[0])
+            if vfe_pi[0].shape[1]==neg_efe[0].shape[0]:
+                #print("pi posterior")
+                #print(vfe_pi[0][:,:,:])
+                #print(reflect_len)
+                #print(vfe_pi[0][:,:,-reflect_len-1])
+                vfe_pi2=vfe_pi[0][:,:,-policy_len-1]
+                vfe_pi2=vfe_pi2.flatten()
+                #vfe_pi2=jnp.sum(vfe_pi2, axis=-1).flatten()
+                #print(vfe_pi2)
+                q_pi=nn.softmax(gamma * neg_efe + log_stable(self.E) - vfe_pi2)
+            else:
+                q_pi=nn.softmax(gamma * neg_efe + log_stable(self.E))
+            q_pi_0=nn.softmax(gamma * neg_efe + log_stable(self.E))
+            #print("Gerror@scan")
+            #print((q_pi - q_pi_0).flatten())
+            #print(neg_efe.flatten())
+            #Gerror=jnp.dot((q_pi - q_pi_0), neg_efe)
+            Gerror = jnp.broadcast_to(jnp.dot((q_pi - q_pi_0).flatten(), neg_efe.flatten()), (self.batch_size,))
+            #print(Gerror)
+            dFdg=qb-beta+Gerror
+            #print(dFdg)
+            qb=qb-dFdg/2
+            gamma=1/qb
+            return (q_pi, q_pi_0, gamma, Gerror, qb), None
+        gamma=self.gamma
+        q_pi=nn.softmax(gamma * neg_efe + log_stable(self.E))
+        q_pi_0=nn.softmax(gamma * neg_efe + log_stable(self.E))
+        #print("initialGerror")
+        Gerror=jnp.broadcast_to(jnp.dot((q_pi - q_pi_0).flatten(), neg_efe.flatten()), (self.batch_size,))
+        qb=jnp.broadcast_to(beta, (self.batch_size,))
+        #print("scan")
+        output, _ = lax.scan(scan_fn, (q_pi, q_pi_0, gamma, Gerror, qb), jnp.arange(self.num_iter))
+        q_pi, q_pi_0, gamma, Gerror, qb = output
+        #self.gamma=gamma
+        agent = tree_at(lambda x: x.gamma, agent, gamma)
+        return agent, q_pi, q_pi_0, gamma, Gerror
+    
+
+    def sample_action_policy_idx(self, q_pi: Array, rng_key=None):
+        """
+        Sample or select a discrete action from the posterior over control states.
+        
+        Returns
+        ----------
+        action: 1D ``jax.numpy.ndarray``
+            Vector containing the indices of the actions for each control factor
+        action_probs: 2D ``jax.numpy.ndarray``
+            Array of action probabilities
+        """
+
+        if (rng_key is None) and (self.action_selection == "stochastic"):
+            raise ValueError("Please provide a random number generator key to sample actions stochastically")
+
+        if self.sampling_mode == "marginal":
+            sample_action = partial(control.sample_action, self.policies, self.num_controls, action_selection=self.action_selection)
+            action = vmap(sample_action)(q_pi, alpha=self.alpha, rng_key=rng_key)
+        elif self.sampling_mode == "full":
+            sample_policy = partial(control.sample_policy_idx, self.policies, action_selection=self.action_selection)
+            action, policy_idx = vmap(sample_policy)(q_pi, alpha=self.alpha, rng_key=rng_key)
+
+        return action, policy_idx
+        """ def scan_fn(carry, iter):
+            qs, err, vfe, kld, bs, un  = carry
+
+            ln_qs = jtu.tree_map(log_stable, qs)
+            # messages from future $m_+(s_t)$ and past $m_-(s_t)$ for all time steps and factors. For t = T we have that $m_+(s_T) = 0$
+            
+            lnB_future, lnB_past, lnB_future_for_kld = get_messages(ln_B, B, qs, ln_prior, B_dependencies)
+
+            #mgds = jtu.Partial(mirror_gradient_descent_step, tau)
+            mgds_vfe = jtu.Partial(mirror_gradient_descent_step_vfe_kld, tau)
+
+            ln_As = vmap(all_marginal_log_likelihood, in_axes=(0, 0, None))(qs, log_likelihoods, A_dependencies)
+
+            output = jtu.tree_map(mgds_vfe, ln_As, lnB_past, lnB_future, ln_qs, lnB_future_for_kld)
+            qs, err, vfe, kld, bs, un = zip(*output)
+            return (list(qs), list(err), list(vfe), list(kld), list(bs), list(un)), None
+        err = qs
+        vfe = qs
+        kld = qs
+        bs = qs
+        un = qs
+        output, _ = lax.scan(scan_fn, (qs, err, vfe, kld, bs, un), jnp.arange(num_iter)) """
+    
+    def infer_states_vfe_policies2(self, observations, empirical_prior, *, past_actions=None, qs_hist=None, mask=None):
+        """
+        Update approximate posterior over hidden states by solving variational inference problem, given an observation.
+
+        Parameters
+        ----------
+        observations: ``list`` or ``tuple`` of ints
+            The observation input. Each entry ``observation[m]`` stores one-hot vectors representing the observations for modality ``m``.
+        past_actions: ``list`` or ``tuple`` of ints
+            The action input. Each entry ``past_actions[f]`` stores indices (or one-hots?) representing the actions for control factor ``f``.
+        empirical_prior: ``list`` or ``tuple`` of ``jax.numpy.ndarray`` of dtype object
+            Empirical prior beliefs over hidden states. Depending on the inference algorithm chosen, the resulting ``empirical_prior`` variable may be a matrix (or list of matrices) 
+            of additional dimensions to encode extra conditioning variables like timepoint and policy.
+        Returns
+        ---------
+        qs: ``numpy.ndarray`` of dtype object
+            Posterior beliefs over hidden states. Depending on the inference algorithm chosen, the resulting ``qs`` variable will have additional sub-structure to reflect whether
+            beliefs are additionally conditioned on timepoint and policy.
+            For example, in case the ``self.inference_algo == 'MMP' `` indexing structure is policy->timepoint-->factor, so that 
+            ``qs[p_idx][t_idx][f_idx]`` refers to beliefs about marginal factor ``f_idx`` expected under policy ``p_idx`` 
+            at timepoint ``t_idx``.
+        """
+        if not self.onehot_obs:
+            o_vec = [nn.one_hot(o, self.num_obs[m]) for m, o in enumerate(observations)]
+        else:
+            o_vec = observations
+        
+        A = self.A
+        if mask is not None:
+            for i, m in enumerate(mask):
+                o_vec[i] = m * o_vec[i] + (1 - m) * jnp.ones_like(o_vec[i]) / self.num_obs[i]
+                A[i] = m * A[i] + (1 - m) * jnp.ones_like(A[i]) / self.num_obs[i]
+
+        
+        policies = self.policies
+        batch_size = 1 # number of agents
+        policies = jtu.tree_map(lambda x: jnp.broadcast_to(x, (batch_size,) + x.shape), policies)
+        _,K, t,_= policies.shape
+        #print(t)
+        #print(past_actions.shape)
+        selected_policy=-1
+        if past_actions is not None:
+            #print(past_actions.shape)
+            if past_actions.shape[1]>=t:
+                 #for i in range(K):
+                    #print(past_actions[:,-t:])
+                #print(past_actions[:,-t:][0])
+                #print(policies[0][0])
+                    #if jnp.array_equal(past_actions[:,-t:][0], policies[0][i]):
+                        #selected_policy=i 
+                selected_policy = jnp.where(
+                    jnp.all(past_actions[:, -t:][0] == policies[0], axis=(1, 2)),
+                    jnp.arange(K),
+                    -1
+                ).max()
+                #print(selected_policy)
+            else:
+                selected_policy=-1
+        else:
+            selected_policy=-1
+        
+        infer_states_policies = partial(
+            inference.update_posterior_states_vfe_policies2,
+            A_dependencies=self.A_dependencies,
+            B_dependencies=self.B_dependencies,
+            num_iter=self.num_iter,
+            method=self.inference_algo
+        )
+        
+        output, err, vfe, kld, bs, un = vmap(infer_states_policies)(#vmap(infer_states)(
+            A,
+            self.B,
+            o_vec,
+            policies,
+            past_actions,
+            prior=empirical_prior,
+            qs_hist=qs_hist
+        )
+        
+        #print(len(output))
+        #print(output[0].shape)
+        #output = jnp.where(selected_policy != -1, jnp.array(jtu.tree_map(
+        #    lambda x: x[0][selected_policy],output)[0]), jnp.array(output))
+        #print(selected_policy)
+        #output = jnp.where(selected_policy != -1, jnp.array(output[selected_policy]), jnp.array(output))#selected_policy
+        """ if selected_policy != -1:
+            output=output[selected_policy] """
+        #print(output)
+        if past_actions is not None:
+            if past_actions.shape[1]>=t:
+                #output=output[selected_policy]
+                #print(jnp.array(output).shape)
+                policy_mask = jnp.all(past_actions[:, -t:][0] == policies[0], axis=(1, 2))
+                output = jnp.where(policy_mask[:, None, None, None, None], jnp.array(output), jnp.zeros_like(jnp.array(output)))
+                output = output.sum(axis=0, keepdims=True)
+                output = output.squeeze(axis=0)  # 不要な次元を削除
+                #print(output.shape)
+                #print(policy_mask)
+        #output = jnp.where(selected_policy != -1, jnp.array(jtu.tree_map(lambda x: x[0],output)[selected_policy]), jnp.array(output))
+        output=list(output)
+        #print(output)
+        #print(len(output))
+            #output=jtu.tree_map(lambda x: jnp.expand_dims(x, -1).astype(jnp.float32), output) #vfe=vfe[0].sum(2)
+        """ vfe=jtu.tree_map(lambda x: x.sum(2),vfe)
+        err=jtu.tree_map(lambda x: x.sum(2),err)
+        kld=jtu.tree_map(lambda x: x.sum(2),kld)
+        bs=jtu.tree_map(lambda x: x.sum(2),bs)
+        un=jtu.tree_map(lambda x: x.sum(2),un)
+        """
+        #vfe=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(2),x),vfe)
+        """ err=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(2),x),err)
+        kld=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(2),x),kld)
+        bs=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(2),x),bs)
+        un=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(2),x),un) """
+       
+
+        return output, err, vfe, kld, bs, un
+
+    
+    def infer_policies_detail(self, qs: List):
+        """
+        more detail breakdown of expected free energy than original infer_policies function
+
+        Returns
+        ----------
+        q_pi: 1D ``numpy.ndarray``
+            Posterior beliefs over policies, i.e. a vector containing one posterior probability per policy.
+        G: 1D ``numpy.ndarray``
+            Negative expected free energies of each policy, i.e. a vector containing one negative expected free energy per policy.
+        info: 1D ``dict``
+            details of expected free energies, {"state_info_gain":info_gain, "utility":utility, "pA_info_gain":pA_info_gain, "pB_info_gain":pB_info_gain, "inductive_value":inductive_value}
+            G(above) = info_gain + utility - (pA_info_gain + pB_info_gain) + inductive_value
+        """
+
+        latest_belief = jtu.tree_map(lambda x: x[:, -1], qs) # only get the posterior belief held at the current timepoint
+        infer_policies = partial(
+            control.update_posterior_policies_inductive_detail,
+            self.policies,
+            A_dependencies=self.A_dependencies,
+            B_dependencies=self.B_dependencies,
+            use_utility=self.use_utility,
+            use_states_info_gain=self.use_states_info_gain,
+            use_param_info_gain=self.use_param_info_gain,
+            use_inductive=self.use_inductive
+        )
+
+        q_pi, G, info = vmap(infer_policies)(
+            latest_belief, 
+            self.A,
+            self.B,
+            self.C,
+            self.E,
+            self.pA,
+            self.pB,
+            I = self.I,
+            gamma=self.gamma,
+            inductive_epsilon=self.inductive_epsilon
+        )
+
+        return q_pi, G, info
+    
+    def infer_policies_efe_qs_pi_sub(self, qs_pi: List):
+        """
+        Perform policy inference by optimizing a posterior (categorical) distribution over policies.
+        This distribution is computed as the softmax of ``G * gamma + lnE`` where ``G`` is the negative expected
+        free energy of policies, ``gamma`` is a policy precision and ``lnE`` is the (log) prior probability of policies.
+        This function returns the posterior over policies as well as the negative expected free energy of each policy.
+
+        Returns
+        ----------
+        q_pi: 1D ``numpy.ndarray``
+            Posterior beliefs over policies, i.e. a vector containing one posterior probability per policy.
+        G: 1D ``numpy.ndarray``
+            Negative expected free energies of each policy, i.e. a vector containing one negative expected free energy per policy.
+        """
+        #latest_belief = jtu.tree_map(lambda x: x[:, -1], qs) 
+        policy_len=self.policy_len
+        #print(qs_pi[0].shape)
+        latest_belief = jtu.tree_map(lambda x: x[:, :,-1-policy_len:,:],qs_pi)#jtu.tree_map(lambda x: x[:, :,-1-policy_len,:],qs_pi)
+        #print(latest_belief[0].shape)
+        #latest_belief = jtu.tree_map(lambda y:jtu.tree_map(lambda x: x[:, -1-policy_len], y),qs_pi) # only get the posterior belief held at the current timepoint
+
+        #latest_belief = jtu.tree_map(lambda y:jtu.tree_map(lambda x: x[:, -1], y),qs_pi)
+        infer_policies = partial(
+            control.update_posterior_policies_inductive_efe_qs_pi,
+            self.policies,
+            A_dependencies=self.A_dependencies,
+            B_dependencies=self.B_dependencies,
+            use_utility=self.use_utility,
+            use_states_info_gain=self.use_states_info_gain,
+            use_param_info_gain=self.use_param_info_gain,
+            use_inductive=self.use_inductive
+        )
+
+        q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB = vmap(infer_policies)(
+            latest_belief, 
+            self.A,
+            self.B,
+            self.C,
+            self.E,
+            self.pA,
+            self.pB,
+            I = self.I,
+            gamma=self.gamma,
+            inductive_epsilon=self.inductive_epsilon
+        )
+
+        return q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB
+
+    def infer_policies_efe_qs_pi(self, qs_pi: List):
+        """
+        Perform policy inference by optimizing a posterior (categorical) distribution over policies.
+        This distribution is computed as the softmax of ``G * gamma + lnE`` where ``G`` is the negative expected
+        free energy of policies, ``gamma`` is a policy pision and ``lnE`` is the (log) prior probability of policies.
+        This function returns the posterior over policies as well as the negative expected free energy of each policy.
+
+        Returns
+        ----------
+        q_pi: 1D ``numpy.ndarray``
+            Posterior beliefs over policies, i.e. a vector containing one posterior probability per policy.
+        G: 1D ``numpy.ndarray``
+            Negative expected free energies of each policy, i.e. a vector containing one negative expected free energy per policy.
+        """
+        #print(qs_pi[0].shape)
+        #q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB=jnp.where(len(qs_pi)==1,jnp.array(self.infer_policies_efe(qs_pi)),
+                                                                 #jnp.array(self.infer_policies_efe_qs_pi_sub(qs_pi)))
+
+        if len(qs_pi)==1:
+            q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB=self.infer_policies_efe(qs_pi)
+        else:
+            q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB=self.infer_policies_efe_qs_pi_sub(qs_pi)
+        """ q_pi=list(q_pi)
+        G=list(G)
+        PBS=list(PBS)
+        PKLD=list(PKLD)
+        PFE=list(PFE)
+        oRisk=list(oRisk)
+        PBS_pA=list(PBS_pA)
+        PBS_pB=list(PBS_pB) """
+        return q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB
+    
+    def infer_policies_precision2(self, neg_efe, vfe_pi, beta=1, reflect_len=None):
+        agent=self
+        if reflect_len is None:
+            reflect_len=self.policy_len
+        def scan_fn(carry, iter):
+            q_pi, q_pi_0, gamma, Gerror, qb=carry
+            #print(vfe_pi[0].shape[0])
+            if vfe_pi[0].shape[1]==neg_efe[0].shape[0]:
+                #print("pi posterior")
+                #print(vfe_pi[0][0,:,:])
+                #print(reflect_len)
+                #print(vfe_pi[0][:,:,-reflect_len:])
+                
+                vfe_pi2=vfe_pi[0][:,:,-reflect_len:]
+                
+                vfe_pi2=jnp.sum(vfe_pi2, axis=-1).flatten()
+                #print(vfe_pi2)
+                q_pi=nn.softmax(gamma * neg_efe + log_stable(self.E) - vfe_pi2)
+            else:
+                q_pi=nn.softmax(gamma * neg_efe + log_stable(self.E))
+            q_pi_0=nn.softmax(gamma * neg_efe + log_stable(self.E))
+            #print("Gerror@scan")
+            #print((q_pi - q_pi_0).flatten())
+            #print(neg_efe.flatten())
+            #Gerror=jnp.dot((q_pi - q_pi_0), neg_efe)
+            Gerror = jnp.broadcast_to(jnp.dot((q_pi - q_pi_0).flatten(), neg_efe.flatten()), (self.batch_size,))
+            #print(Gerror)
+            dFdg=qb-beta+Gerror
+            #print(dFdg)
+            qb=qb-dFdg/2
+            gamma=1/qb
+            return (q_pi, q_pi_0, gamma, Gerror, qb), None
+        gamma=self.gamma
+        q_pi=nn.softmax(gamma * neg_efe + log_stable(self.E))
+        q_pi_0=nn.softmax(gamma * neg_efe + log_stable(self.E))
+        #print("initialGerror")
+        Gerror=jnp.broadcast_to(jnp.dot((q_pi - q_pi_0).flatten(), neg_efe.flatten()), (self.batch_size,))
+        qb=jnp.broadcast_to(beta, (self.batch_size,))
+        #print("scan")
+        output, _ = lax.scan(scan_fn, (q_pi, q_pi_0, gamma, Gerror, qb), jnp.arange(self.num_iter))
+        q_pi, q_pi_0, gamma, Gerror, qb = output
+        #self.gamma=gamma
+        agent = tree_at(lambda x: x.gamma, agent, gamma)
+        return agent, q_pi, q_pi_0, gamma, Gerror
+    
+    def calc_bayesian_model_averaging(self, qs_pi, q_pi):
+        if len(qs_pi)>1:
+            beliefs = jnp.array(qs_pi)
+            Bayesian_model_avaraging_full_old = list(jnp.mean(beliefs, axis=0))
+            #print(beliefs)
+            #print(q_pi)
+            Bayesian_model_avaraging_full=jnp.tensordot(q_pi, beliefs, axes=(1, 0))
+            Bayesian_model_avaraging_full = list(Bayesian_model_avaraging_full[0])
+            #print(Bayesian_model_avaraging_full_old)
+            #print(Bayesian_model_avaraging_full)
+            K, t,_= self.policies.shape
+            Bayesian_model_avaraging = jtu.tree_map( lambda x: x[:, :-t], Bayesian_model_avaraging_full)
+        else:
+            Bayesian_model_avaraging=qs_pi
+        return Bayesian_model_avaraging
+    
+    def calc_KLD_past_currentqs_pi(self, past_qs_pi, current_qs_pi):
+        """
+        認識によって減少する自由エネルギーを計算．mmpを想定．
+        t:現在のタイムステップ
+        
+        past_beliefs:t-1におけるtまでの状態に関する信念
+        current_beliefs:tにおけるtまでの状態に関する信念
+        D_KL(past_beliefs|current_beliefs)を計算．
+        """
+        #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate([x, y[None, ...]], axis=1), past_qs, empirical_prior)
+        #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate([x, y], axis=1), past_qs, empirical_prior)
+        #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate([x, y[:, None, :]], axis=1), past_qs, empirical_prior)
+        K, t,_= self.policies.shape
+        
+            #print("combart")
+        #empirical_prior = jtu.tree_map(lambda x: x[None, ...], empirical_prior) # 2次元配列を3次元配列に変換
+            #print("combine")
+        #past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate((x, y), axis=1), past_qs_pi, empirical_prior)
+            #past_beliefs = jnp.concatenate((past_qs, empirical_prior), axis=1)
+        #print(past_qs_pi[0])   
+        #print(current_qs_pi[0].shape)
+        if len(past_qs_pi[0].shape) ==2:
+            past_beliefs = past_qs_pi
+            #current_beliefs = current_qs_pi
+        else:
+            past_beliefs = past_qs_pi
+            past_beliefs = jtu.tree_map( lambda x: x[:,:-t], past_qs_pi)
+            #current_beliefs = jtu.tree_map( lambda x: x[0,:,:], current_qs_pi)
+        #jtu.tree_map( lambda x: x[:, 1:-t], current_qs_pi)
+        current_beliefs = current_qs_pi
+        
+        kld = inference.calc_KLD(past_beliefs, current_beliefs)
+        return kld
+    
+    def compute_expected_state(self, action, qs):
+        # return empirical_prior, and the history of posterior beliefs (filtering distributions) held about hidden states at times 1, 2 ... t
+
+        # this computation of the predictive prior is correct only for fully factorised Bs.
+        
+        qs_last = jtu.tree_map( lambda x: x[:, -1], qs)
+        propagate_beliefs = partial(control.compute_expected_state, B_dependencies=self.B_dependencies)
+        pred = vmap(propagate_beliefs)(qs_last, self.B, action)
+        
+        return pred
+    
+    def infer_states2(self, observations, empirical_prior, *, past_actions=None, qs_hist=None, mask=None):
+        """
+        Update approximate posterior over hidden states by solving variational inference problem, given an observation.
+
+        Parameters
+        ----------
+        observations: ``list`` or ``tuple`` of ints
+            The observation input. Each entry ``observation[m]`` stores one-hot vectors representing the observations for modality ``m``.
+        past_actions: ``list`` or ``tuple`` of ints
+            The action input. Each entry ``past_actions[f]`` stores indices (or one-hots?) representing the actions for control factor ``f``.
+        empirical_prior: ``list`` or ``tuple`` of ``jax.numpy.ndarray`` of dtype object
+            Empirical prior beliefs over hidden states. Depending on the inference algorithm chosen, the resulting ``empirical_prior`` variable may be a matrix (or list of matrices) 
+            of additional dimensions to encode extra conditioning variables like timepoint and policy.
+        Returns
+        ---------
+        qs: ``numpy.ndarray`` of dtype object
+            Posterior beliefs over hidden states. Depending on the inference algorithm chosen, the resulting ``qs`` variable will have additional sub-structure to reflect whether
+            beliefs are additionally conditioned on timepoint and policy.
+            For example, in case the ``self.inference_algo == 'MMP' `` indexing structure is policy->timepoint-->factor, so that 
+            ``qs[p_idx][t_idx][f_idx]`` refers to beliefs about marginal factor ``f_idx`` expected under policy ``p_idx`` 
+            at timepoint ``t_idx``.
+        """
+        if not self.onehot_obs:
+            o_vec = [nn.one_hot(o, self.num_obs[m]) for m, o in enumerate(observations)]
+        else:
+            o_vec = observations
+        
+        A = self.A
+        if mask is not None:
+            for i, m in enumerate(mask):
+                o_vec[i] = m * o_vec[i] + (1 - m) * jnp.ones_like(o_vec[i]) / self.num_obs[i]
+                A[i] = m * A[i] + (1 - m) * jnp.ones_like(A[i]) / self.num_obs[i]
+
+        infer_states = partial(
+            inference.update_posterior_states2,
+            A_dependencies=self.A_dependencies,
+            B_dependencies=self.B_dependencies,
+            num_iter=self.num_iter,
+            method=self.inference_algo
+        )
+        
+        #output = vmap(infer_states)(
+        output, err = vmap(infer_states)(
+            A,
+            self.B,
+            o_vec,
+            past_actions,
+            prior=empirical_prior,
+            qs_hist=qs_hist
+        )
+
+        #return output
+
+        # print(f'output : {output}')
+        # print(f'err : {err}')
+
+        output_last = jtu.tree_map( lambda x: x[:,-1], output)
+        errs_last = jtu.tree_map( lambda x: x[:,-1], err)
+        # print(f'output_last : {output_last}')
+        # print(f'errs_last : {errs_last}')
+        # print(f'output_last[0] : {output_last[0]}')
+        # print(f'errs_last[0] : {errs_last[0]}')
+        # print(f'output_last[0][0] : {output_last[0][0]}')
+        # print(f'errs_last[0][0] : {errs_last[0][0]}')
+
+        vfe = [-jnp.dot(output_last[0][0], errs_last[0][0])]
+
+        # print(f'output[0][0].shape[0] : {output[0][0].shape[0]}')
+        # vfes = []
+        # for i in range(output[0][0].shape[0]):
+        #     output_i = jtu.tree_map( lambda x: x[:,i], output)
+        #     errs_i = jtu.tree_map( lambda x: x[:,i], err)
+        #     vfes.append(-jnp.dot(output_i[0][0], errs_i[0][0]))
+
+        return output, vfe#, vfes
+    
+    def infer_parameters_epsilon(self, beliefs_A, outcomes, actions, beliefs_B=None, lr_pA=1., lr_pB=1., epsilon=1e-6,**kwargs):
+        agent = self
+        beliefs_B = beliefs_A if beliefs_B is None else beliefs_B
+        if self.inference_algo == 'ovf':
+            smoothed_marginals_and_joints = vmap(inference.smoothing_ovf)(beliefs_A, self.B, actions)
+            marginal_beliefs = smoothed_marginals_and_joints[0]
+            joint_beliefs = smoothed_marginals_and_joints[1]
+        else:
+            marginal_beliefs = beliefs_A
+            if self.learn_B:
+                nf = len(beliefs_B)
+                joint_fn = lambda f: [beliefs_B[f][:, 1:]] + [beliefs_B[f_idx][:, :-1] for f_idx in self.B_dependencies[f]]
+                joint_beliefs = jtu.tree_map(joint_fn, list(range(nf)))
+
+        if self.learn_A:
+            update_A = partial(
+                learning.update_obs_likelihood_dirichlet_epsilon,
+                A_dependencies=self.A_dependencies,
+                num_obs=self.num_obs,
+                onehot_obs=self.onehot_obs,
+            )
+            
+            lr = jnp.broadcast_to(lr_pA, (self.batch_size,))
+            eps = jnp.broadcast_to(epsilon, (self.batch_size,))
+            qA, E_qA = vmap(update_A)(
+                self.pA,
+                self.A,
+                outcomes,
+                marginal_beliefs,
+                lr=lr,
+                epsilon=eps
+            )
+            
+            agent = tree_at(lambda x: (x.A, x.pA), agent, (E_qA, qA))
+            
+        if self.learn_B:
+            assert beliefs_B[0].shape[1] == actions.shape[1] + 1
+            update_B = partial(
+                learning.update_state_transition_dirichlet,
+                num_controls=self.num_controls
+            )
+
+            lr = jnp.broadcast_to(lr_pB, (self.batch_size,))
+            qB, E_qB = vmap(update_B)(
+                self.pB,
+                joint_beliefs,
+                actions,
+                lr=lr
+            )
+            
+            # if you have updated your beliefs about transitions, you need to re-compute the I matrix used for inductive inferenece
+            if self.use_inductive and self.H is not None:
+                I_updated = vmap(control.generate_I_matrix)(self.H, E_qB, self.inductive_threshold, self.inductive_depth)
+            else:
+                I_updated = self.I
+
+            agent = tree_at(lambda x: (x.B, x.pB, x.I), agent, (E_qB, qB, I_updated))
+
+        return agent
+    
+    def compute_expected_state_obs(self, action, qs):
+        # return empirical_prior, and the history of posterior beliefs (filtering distributions) held about hidden states at times 1, 2 ... t
+
+        # this computation of the predictive prior is correct only for fully factorised Bs.
+        qs_last = jtu.tree_map( lambda x: x[:, -1], qs)
+        propagate_beliefs = partial(control.compute_expected_state_obs, A_dependencies=self.A_dependencies,B_dependencies=self.B_dependencies)
+        qs_pi, qo_pi = vmap(propagate_beliefs)(qs_last, self.A, self.B, action)
+        
+        return qs_pi, qo_pi
+    
+    def calc_KLD_prior_posterior(self, past_qs, current_qs):
+        
+        """ if past_qs is not None:
+            
+            empirical_prior = jtu.tree_map(lambda x: x[None, ...], empirical_prior) # 2次元配列を3次元配列に変換
+            #print("combine")
+            past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate((x, y), axis=1), past_qs, empirical_prior)
+            #past_beliefs = jnp.concatenate((past_qs, empirical_prior), axis=1)
+            #print(past_beliefs[0].shape)
+            #print(current_qs[0].shape)
+        else:
+            past_beliefs = empirical_prior """
+        
+        kld = inference.calc_KLD(past_qs,current_qs)
+        return kld
+    
+    def infer_policies_efe_qs_pi_sub_old(self, qs_pi: List):
+        """
+        Perform policy inference by optimizing a posterior (categorical) distribution over policies.
+        This distribution is computed as the softmax of ``G * gamma + lnE`` where ``G`` is the negative expected
+        free energy of policies, ``gamma`` is a policy precision and ``lnE`` is the (log) prior probability of policies.
+        This function returns the posterior over policies as well as the negative expected free energy of each policy.
+
+        Returns
+        ----------
+        q_pi: 1D ``numpy.ndarray``
+            Posterior beliefs over policies, i.e. a vector containing one posterior probability per policy.
+        G: 1D ``numpy.ndarray``
+            Negative expected free energies of each policy, i.e. a vector containing one negative expected free energy per policy.
+        """
+        #latest_belief = jtu.tree_map(lambda x: x[:, -1], qs) 
+        policy_len=self.policy_len
+        #print(qs_pi[0].shape)
+        latest_belief = jtu.tree_map(lambda x: x[:, :,-1-policy_len,:],qs_pi)
+        #print(latest_belief[0].shape)
+        #latest_belief = jtu.tree_map(lambda y:jtu.tree_map(lambda x: x[:, -1-policy_len], y),qs_pi) # only get the posterior belief held at the current timepoint
+
+        #latest_belief = jtu.tree_map(lambda y:jtu.tree_map(lambda x: x[:, -1], y),qs_pi)
+        infer_policies = partial(
+            control.update_posterior_policies_inductive_efe_qs_pi_old,
+            self.policies,
+            A_dependencies=self.A_dependencies,
+            B_dependencies=self.B_dependencies,
+            use_utility=self.use_utility,
+            use_states_info_gain=self.use_states_info_gain,
+            use_param_info_gain=self.use_param_info_gain,
+            use_inductive=self.use_inductive
+        )
+
+        q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB = vmap(infer_policies)(
+            latest_belief, 
+            self.A,
+            self.B,
+            self.C,
+            self.E,
+            self.pA,
+            self.pB,
+            I = self.I,
+            gamma=self.gamma,
+            inductive_epsilon=self.inductive_epsilon
+        )
+
+        return q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB
