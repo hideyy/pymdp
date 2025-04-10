@@ -578,7 +578,7 @@ def compute_predicted_KLD(qs, qo, A, A_dependencies):
     #print("A_dependencies:", A_dependencies)
     def compute_pKLD_for_modality(qo_m, A_m, m):
         H_qo = stable_entropy(qo_m)#Entropy計算
-        print(f"H_qo:",H_qo)
+        #print(f"H_qo:",H_qo)
         deps = A_dependencies[m]
         relevant_factors = [qs[idx] for idx in deps]
         #relevant_factors = [jnp.array(qs[idx]) for idx in deps]
@@ -597,14 +597,14 @@ def compute_predicted_KLD(qs, qo, A, A_dependencies):
         #qo_ln_A_m =-(qo_m * log_A_m).sum(0)
         qo_ln_A_m = -(jnp.expand_dims(qo_m, axis=tuple(range(1, log_A_m.ndim))) * log_A_m).sum(0)#Σq(o|π)lnp(o|s)
         #qo_ln_A_m = jnp.einsum('i,ijklm->jklm', qo_m, log_A_m)
-        print(f"qo_ln_A_m:",qo_ln_A_m)
+        #print(f"qo_ln_A_m:",qo_ln_A_m)
         #qo_ln_A_m = - factor_dot(log_A_m, qo_m)
         #print("qo_qs_ln_A_m")
         #print(qo_ln_A_m)
         #qo_qs_ln_A_m = -(qo_m * qs_ln_A_m).sum()
         #print(relevant_factors)
         qo_qs_ln_A_m = factor_dot(qo_ln_A_m, relevant_factors)#Σq(o|π)lnp(o|s)とq(s|π)の内積を取る
-        print(f"qo_qs_ln_A_m:",qo_qs_ln_A_m)
+        #print(f"qo_qs_ln_A_m:",qo_qs_ln_A_m)
         #print(qo_qs_ln_A_m - H_qo)
         #qo_qs_ln_A_m = factor_dot(qs_ln_A_m, qo_m)
         
