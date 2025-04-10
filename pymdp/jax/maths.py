@@ -134,8 +134,8 @@ def spm_wnorm(A):
     Returns Expectation of logarithm of Dirichlet parameters over a set of 
     Categorical distributions, stored in the columns of A.
     """
-    norm = 1. / A.sum(axis=0)
-    avg = 1. / (A + MINVAL)
+    norm = 1. / A.sum(axis=0)#各列の合計値の逆数を計算
+    avg = 1. / (A + MINVAL)#各要素に小さな値（MINVAL）を加えた後の逆数を計算（ゼロ除算を防ぐため）
     wA = norm - avg
     return wA
 

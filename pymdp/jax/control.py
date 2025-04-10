@@ -204,11 +204,11 @@ def compute_info_gain(qs, qo, A, A_dependencies):
     """
 
     def compute_info_gain_for_modality(qo_m, A_m, m):
-        H_qo = stable_entropy(qo_m)
-        H_A_m = - stable_xlogx(A_m).sum(0)
+        H_qo = stable_entropy(qo_m)#Entropyの計算
+        H_A_m = - stable_xlogx(A_m).sum(0)#観測モデル（A,）p(o|s)のエントロピーを計算し，o方向に和を取る．
         deps = A_dependencies[m]
         relevant_factors = [qs[idx] for idx in deps]
-        qs_H_A_m = factor_dot(H_A_m, relevant_factors)
+        qs_H_A_m = factor_dot(H_A_m, relevant_factors)#Ambiguityの計算．q(s|π)とH_A_mの内積．
         return H_qo - qs_H_A_m
     
     info_gains_per_modality = jtu.tree_map(compute_info_gain_for_modality, qo, A, list(range(len(A))))
@@ -248,9 +248,9 @@ def calc_pA_info_gain(pA, qo, qs, A_dependencies):
     """
 
     def infogain_per_modality(pa_m, qo_m, m):
-        wa_m = spm_wnorm(pa_m) * (pa_m > 0.)
-        fd = factor_dot(wa_m, [s for f, s in enumerate(qs) if f in A_dependencies[m]], keep_dims=(0,))[..., None]
-        return qo_m.dot(fd)
+        wa_m = spm_wnorm(pa_m) * (pa_m > 0.) #ディリクリパラメータの逆数のようなもの．パラメータが蓄積されているほど小さい．
+        fd = factor_dot(wa_m, [s for f, s in enumerate(qs) if f in A_dependencies[m]], keep_dims=(0,))[..., None]#wa_mとq(s|π)の内積
+        return qo_m.dot(fd)#fdとq(o|π)の内積？
 
     pA_infogain_per_modality = jtu.tree_map(
         infogain_per_modality, pA, qo, list(range(len(qo)))
@@ -577,7 +577,8 @@ def compute_predicted_KLD(qs, qo, A, A_dependencies):
     #print("A:", A)
     #print("A_dependencies:", A_dependencies)
     def compute_pKLD_for_modality(qo_m, A_m, m):
-        H_qo = stable_entropy(qo_m)
+        H_qo = stable_entropy(qo_m)#Entropy計算
+        print(f"H_qo:",H_qo)
         deps = A_dependencies[m]
         relevant_factors = [qs[idx] for idx in deps]
         #relevant_factors = [jnp.array(qs[idx]) for idx in deps]
@@ -594,15 +595,16 @@ def compute_predicted_KLD(qs, qo, A, A_dependencies):
         #print(log_A_m)
         #print(qo_m)
         #qo_ln_A_m =-(qo_m * log_A_m).sum(0)
-        qo_ln_A_m = -(jnp.expand_dims(qo_m, axis=tuple(range(1, log_A_m.ndim))) * log_A_m).sum(0)
+        qo_ln_A_m = -(jnp.expand_dims(qo_m, axis=tuple(range(1, log_A_m.ndim))) * log_A_m).sum(0)#Σq(o|π)lnp(o|s)
         #qo_ln_A_m = jnp.einsum('i,ijklm->jklm', qo_m, log_A_m)
-        
+        print(f"qo_ln_A_m:",qo_ln_A_m)
         #qo_ln_A_m = - factor_dot(log_A_m, qo_m)
         #print("qo_qs_ln_A_m")
         #print(qo_ln_A_m)
         #qo_qs_ln_A_m = -(qo_m * qs_ln_A_m).sum()
         #print(relevant_factors)
-        qo_qs_ln_A_m = factor_dot(qo_ln_A_m, relevant_factors)
+        qo_qs_ln_A_m = factor_dot(qo_ln_A_m, relevant_factors)#Σq(o|π)lnp(o|s)とq(s|π)の内積を取る
+        print(f"qo_qs_ln_A_m:",qo_qs_ln_A_m)
         #print(qo_qs_ln_A_m - H_qo)
         #qo_qs_ln_A_m = factor_dot(qs_ln_A_m, qo_m)
         
