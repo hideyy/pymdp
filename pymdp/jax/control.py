@@ -489,8 +489,8 @@ def update_posterior_policies_inductive_efe(policy_matrix, qs_init, A, B, C, E, 
     neg_efe_all_policies = results[0]  # 各ポリシーの負の期待自由エネルギー
     PBS_a_p = results[1]  # 状態情報利得
     PKLD_a_p = results[2]  # 状態情報利得
-    PFE_a_p = results[3]  # 状態情報利得
-    oRisk_a_p = results[4]  # 状態情報利得
+    PFE_a_p = results[3]  # 
+    oRisk_a_p = results[4]  # 
     PBS_pA_a_p = results[5]  # パラメータAに関する情報利得
     PBS_pB_a_p = results[6]  # パラメータBに関する情報利得
     #print(PBS_a_p)
