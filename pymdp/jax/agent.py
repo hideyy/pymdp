@@ -520,7 +520,9 @@ class Agent(Module):
             at timepoint ``t_idx``.
         """
         if not self.onehot_obs:
+            #print("convert to distribution")
             o_vec = [nn.one_hot(o, self.num_obs[m]) for m, o in enumerate(observations)]#観測値のワンホットベクトル化
+            #print(o_vec)
         else:
             o_vec = observations
         
