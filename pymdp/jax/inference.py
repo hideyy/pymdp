@@ -9,6 +9,10 @@ from jax.experimental.sparse._base import JAXSparse
 from jax.experimental import sparse
 from jaxtyping import Array, ArrayLike
 
+from jax.scipy.special import xlogy
+
+from functools import partial
+
 eps = jnp.finfo('float').eps
 
 def update_posterior_states(
