@@ -680,10 +680,11 @@ def sample_policy_idx(policies, q_pi, action_selection="deterministic", alpha = 
     return selected_multiaction, policy_idx
 
 #for infer_policies_detail
-def compute_G_policy_inductive_detail(qs_init, A, B, C, pA, pB, A_dependencies, B_dependencies, I, policy_i, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=False):
+def compute_G_policy_inductive_detail(qs_init, A, B, C, pA, pB, A_dependencies, B_dependencies, I, policy_i, alpha_vec=None, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=False):
     """ 
     Write a version of compute_G_policy that does the same computations as `compute_G_policy` but using `lax.scan` instead of a for loop.
     This one further adds computations used for inductive planning.
+    return detail and calc with alpha if alpha is not None
     """
 
     def scan_body(carry, t):
@@ -694,9 +695,9 @@ def compute_G_policy_inductive_detail(qs_init, A, B, C, pA, pB, A_dependencies, 
 
         qo = compute_expected_obs(qs_next, A, A_dependencies)
 
-        info_gain = compute_info_gain(qs_next, qo, A, A_dependencies) if use_states_info_gain else 0.
+        info_gain = (compute_info_gain_alpha(qs_next, qo, A, A_dependencies, alpha_vec) if alpha_vec is not None else compute_info_gain(qs_next, qo, A, A_dependencies)) if use_states_info_gain else 0.
 
-        utility = compute_expected_utility(t, qo, C) if use_utility else 0.
+        utility = (compute_expected_utility_alpha(t, qo, C, alpha_vec) if alpha_vec is not None else compute_expected_utility(t, qo, C)) if use_utility else 0.
 
         inductive_value = calc_inductive_value_t(qs_init, qs_next, I, epsilon=inductive_epsilon) if use_inductive else 0.
 
@@ -720,11 +721,11 @@ def compute_G_policy_inductive_detail(qs_init, A, B, C, pA, pB, A_dependencies, 
     _, neg_G, info = final_state
     return neg_G, info
 
-def update_posterior_policies_inductive_detail(policy_matrix, qs_init, A, B, C, E, pA, pB, A_dependencies, B_dependencies, I, gamma=16.0, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=True):
+def update_posterior_policies_inductive_detail(policy_matrix, qs_init, A, B, C, E, pA, pB, A_dependencies, B_dependencies, I, alpha_vec = None, gamma=16.0, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=True):
     # policy --> n_levels_factor_f x 1
     # factor --> n_levels_factor_f x n_policies
     ## vmap across policies
-    compute_G_fixed_states = partial(compute_G_policy_inductive_detail, qs_init, A, B, C, pA, pB, A_dependencies, B_dependencies, I, inductive_epsilon=inductive_epsilon,
+    compute_G_fixed_states = partial(compute_G_policy_inductive_detail, qs_init, A, B, C, pA, pB, A_dependencies, B_dependencies, I, alpha_vec=alpha_vec, inductive_epsilon=inductive_epsilon,
                                      use_utility=use_utility,  use_states_info_gain=use_states_info_gain, use_param_info_gain=use_param_info_gain, use_inductive=use_inductive)
 
     # only in the case of policy-dependent qs_inits
@@ -941,3 +942,37 @@ def compute_G_policy_inductive_efe_qs_pi_old( A, B, C, pA, pB, A_dependencies, B
     final_state, _ = lax.scan(scan_body, (qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,inductive_value), jnp.arange(policy_i.shape[0]))
     _, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, inductive_value = final_state
     return neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB
+
+def compute_info_gain_alpha(qs, qo, A, A_dependencies, alpha):
+    """
+    compute info gain with alpha (as a coefficient of each modalities)
+    """
+    assert len(qo) == len(alpha), f"alpha(len:{len(alpha)}) should match with qo(len:{len(qo)})"
+
+    def compute_info_gain_for_modality(qo_m, A_m, m):
+        H_qo = stable_entropy(qo_m)
+        H_A_m = - stable_xlogx(A_m).sum(0)
+        deps = A_dependencies[m]
+        relevant_factors = [qs[idx] for idx in deps]
+        qs_H_A_m = factor_dot(H_A_m, relevant_factors)
+        return H_qo - qs_H_A_m
+    
+    info_gains_per_modality = jtu.tree_map(compute_info_gain_for_modality, qo, A, list(range(len(A))))
+    weighted_info_gains_per_modality = jtu.tree_map(lambda x,a: x*a, info_gains_per_modality, list(alpha))
+
+    return jtu.tree_reduce(lambda x,y: x+y, weighted_info_gains_per_modality)
+
+def compute_expected_utility_alpha(t, qo, C, alpha):
+    """
+    compute utility with alpha (as a coefficient of each modalities)
+    """
+    assert len(C) == len(alpha), f"alpha(len:{len(alpha)}) should match with qo(len:{len(qo)})"
+    
+    util = 0.
+    for o_m, C_m, alpha_m in zip(qo, C, alpha):
+        if C_m.ndim > 1: # when C depend on time
+            util += alpha_m * (o_m * C_m[t]).sum()
+        else:
+            util += alpha_m * (o_m * C_m).sum()
+    
+    return util

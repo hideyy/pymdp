@@ -1000,9 +1000,10 @@ class Agent(Module):
         return output, err, vfe, kld, bs, un
 
     
-    def infer_policies_detail(self, qs: List):
+    def infer_policies_detail(self, qs: List, alpha: List = None):
         """
         more detail breakdown of expected free energy than original infer_policies function
+        with vector alpha that allow EFE balancing
 
         Returns
         ----------
@@ -1027,6 +1028,7 @@ class Agent(Module):
             use_inductive=self.use_inductive
         )
 
+        alpha = jnp.broadcast_to(alpha, (self.batch_size,)+alpha.shape) if alpha is not None else None
         q_pi, G, info = vmap(infer_policies)(
             latest_belief, 
             self.A,
@@ -1035,6 +1037,7 @@ class Agent(Module):
             self.E,
             self.pA,
             self.pB,
+            alpha_vec = alpha, # Alpha for EFE balancing
             I = self.I,
             gamma=self.gamma,
             inductive_epsilon=self.inductive_epsilon
