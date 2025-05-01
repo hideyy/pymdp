@@ -204,11 +204,11 @@ def compute_info_gain(qs, qo, A, A_dependencies):
     """
 
     def compute_info_gain_for_modality(qo_m, A_m, m):
-        H_qo = stable_entropy(qo_m)#Entropyの計算
-        H_A_m = - stable_xlogx(A_m).sum(0)#観測モデル（A,）p(o|s)のエントロピーを計算し，o方向に和を取る．
+        H_qo = stable_entropy(qo_m)#Calculate predictied entropyの計算
+        H_A_m = - stable_xlogx(A_m).sum(0)#観測モデル（A,）p(o|s)のエントロピーを計算し，o方向に和を取る．;Calculate the entropy of the observation model (A, p(o|s)) and sum in the direction of o.
         deps = A_dependencies[m]
         relevant_factors = [qs[idx] for idx in deps]
-        qs_H_A_m = factor_dot(H_A_m, relevant_factors)#Ambiguityの計算．q(s|π)とH_A_mの内積．
+        qs_H_A_m = factor_dot(H_A_m, relevant_factors)#Ambiguityの計算．q(s|π)とH_A_mの内積．;Calculation of ambiguity. Inner product of q(s|π) and H_A_m.
         return H_qo - qs_H_A_m
     
     info_gains_per_modality = jtu.tree_map(compute_info_gain_for_modality, qo, A, list(range(len(A))))
@@ -248,9 +248,9 @@ def calc_pA_info_gain(pA, qo, qs, A_dependencies):
     """
 
     def infogain_per_modality(pa_m, qo_m, m):
-        wa_m = spm_wnorm(pa_m) * (pa_m > 0.) #ディリクリパラメータの逆数のようなもの．パラメータが蓄積されているほど小さい．
-        fd = factor_dot(wa_m, [s for f, s in enumerate(qs) if f in A_dependencies[m]], keep_dims=(0,))[..., None]#wa_mとq(s|π)の内積
-        return qo_m.dot(fd)#fdとq(o|π)の内積？
+        wa_m = spm_wnorm(pa_m) * (pa_m > 0.) #ディリクリパラメータの逆数のようなもの．パラメータが蓄積されているほど小さい．;Something like the reciprocal of the Dirichlet parameter. The more parameters are accumulated, the smaller it becomes.
+        fd = factor_dot(wa_m, [s for f, s in enumerate(qs) if f in A_dependencies[m]], keep_dims=(0,))[..., None]#wa_mとq(s|π)の内積;inner product of wa_m and q(s|π)
+        return qo_m.dot(fd)#fdとq(o|π)の内積？;The inner product of fd and q(o|π)?
 
     pA_infogain_per_modality = jtu.tree_map(
         infogain_per_modality, pA, qo, list(range(len(qo)))
@@ -486,13 +486,13 @@ def update_posterior_policies_inductive_efe(policy_matrix, qs_init, A, B, C, E, 
     results = vmap(compute_G_fixed_states)(policy_matrix)
     
     
-    neg_efe_all_policies = results[0]  # 各ポリシーの負の期待自由エネルギー
-    PBS_a_p = results[1]  # 状態情報利得
+    neg_efe_all_policies = results[0]  # 各ポリシーの負の期待自由エネルギー;Negative expected free energy of each policy
+    PBS_a_p = results[1]  # 状態情報利得;information gain for states
     PKLD_a_p = results[2]  # 状態情報利得
     PFE_a_p = results[3]  # 
     oRisk_a_p = results[4]  # 
-    PBS_pA_a_p = results[5]  # パラメータAに関する情報利得
-    PBS_pB_a_p = results[6]  # パラメータBに関する情報利得
+    PBS_pA_a_p = results[5]  # パラメータAに関する情報利得;information gain for pA(parameter of A)
+    PBS_pB_a_p = results[6]  # パラメータBに関する情報利得;information gain for pB(parameter of B)
     #print(PBS_a_p)
     # only in the case of policy-dependent qs_inits
     # in_axes_list = (1,) * n_factors
@@ -514,18 +514,18 @@ def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_d
         #qs, neg_G = carry
         qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,utility, inductive_value = carry
 
-        qs_next = compute_expected_state(qs, B, policy_i[t], B_dependencies) #q(s|π)=p(sτ+1|sτ,π)stの計算.stは認識分布
+        qs_next = compute_expected_state(qs, B, policy_i[t], B_dependencies) #q(s|π)=p(sτ+1|sτ,π)stの計算.stは認識分布;Calculation of q(s|π)=p(sτ+1|sτ,π)st. st is the recognition distribution.
 
-        qo = compute_expected_obs(qs_next, A, A_dependencies) #q(o|π)=p(o|s)p(sτ+1|sτ,π)stの計算
+        qo = compute_expected_obs(qs_next, A, A_dependencies) #Calculate q(o|π)=p(o|s)p(sτ+1|sτ,π)st
 
-        info_gain += compute_info_gain(qs_next, qo, A, A_dependencies) if use_states_info_gain else 0.#compute_predicted_KLD(qs_next, qo, A, A_dependencies)
+        info_gain += compute_info_gain(qs_next, qo, A, A_dependencies) if use_states_info_gain else 0.#Calculate pBS(epistemic value) #compute_predicted_KLD(qs_next, qo, A, A_dependencies)
 
-        predicted_KLD += compute_predicted_KLD(qs_next, qo, A, A_dependencies) 
+        predicted_KLD += compute_predicted_KLD(qs_next, qo, A, A_dependencies) #Calculate pKLD
         #print("PFE")
-        predicted_F += compute_predicted_free_energy(qs_next, qo, A, A_dependencies) 
+        predicted_F += compute_predicted_free_energy(qs_next, qo, A, A_dependencies) #Calculate predicted free energy
         #print("Risk")
-        oRisk += compute_oRisk(t, qo, C)
-        utility += compute_expected_utility(t, qo, C) if use_utility else 0.
+        oRisk += compute_oRisk(t, qo, C)#Calculate Risk
+        utility += compute_expected_utility(t, qo, C) if use_utility else 0.#Calculate utility(Pragmatic value)
 
         inductive_value += calc_inductive_value_t(qs_init, qs_next, I, epsilon=inductive_epsilon) if use_inductive else 0.
 
@@ -556,7 +556,7 @@ def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_d
     param_info_gainB = 0.
     utility=0.
     inductive_value=0.
-    #ポリシーの深さ分scan_bodyを反復
+    #ポリシーの深さ分scan_bodyを反復; Iterate scan_body by policy depth
     final_state, _ = lax.scan(scan_body, (qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value), jnp.arange(policy_i.shape[0]))
     _, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value = final_state
     #print(info_gain)
@@ -577,7 +577,7 @@ def compute_predicted_KLD(qs, qo, A, A_dependencies):
     #print("A:", A)
     #print("A_dependencies:", A_dependencies)
     def compute_pKLD_for_modality(qo_m, A_m, m):
-        H_qo = stable_entropy(qo_m)#Entropy計算
+        H_qo = stable_entropy(qo_m)#Calculate predicted entropy計算
         #print(f"H_qo:",H_qo)
         deps = A_dependencies[m]
         relevant_factors = [qs[idx] for idx in deps]
@@ -603,7 +603,7 @@ def compute_predicted_KLD(qs, qo, A, A_dependencies):
         #print(qo_ln_A_m)
         #qo_qs_ln_A_m = -(qo_m * qs_ln_A_m).sum()
         #print(relevant_factors)
-        qo_qs_ln_A_m = factor_dot(qo_ln_A_m, relevant_factors)#Σq(o|π)lnp(o|s)とq(s|π)の内積を取る
+        qo_qs_ln_A_m = factor_dot(qo_ln_A_m, relevant_factors)#Σq(o|π)lnp(o|s)とq(s|π)の内積を取る;Take the inner product of Σq(o|π)lnp(o|s) and q(s|π)
         #print(f"qo_qs_ln_A_m:",qo_qs_ln_A_m)
         #print(qo_qs_ln_A_m - H_qo)
         #qo_qs_ln_A_m = factor_dot(qs_ln_A_m, qo_m)
