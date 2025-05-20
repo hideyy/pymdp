@@ -257,7 +257,7 @@ class Agent(Module):
         size = pymath.prod(self.num_controls)
         return jnp.unique(self.policies[:, 0], axis=0, size=size, fill_value=-1)
 
-    def infer_parameters(self, beliefs_A, outcomes, actions, beliefs_B=None, lr_pA=1., lr_pB=1., **kwargs):
+    def infer_parameters(self, beliefs_A, outcomes, actions, beliefs_B=None, lr_pA=1., lr_pB=1., fr_pA=1., fr_pB=1., **kwargs):
         agent = self
         beliefs_B = beliefs_A if beliefs_B is None else beliefs_B
         if self.inference_algo == 'ovf':
@@ -280,12 +280,14 @@ class Agent(Module):
             )
             
             lr = jnp.broadcast_to(lr_pA, (self.batch_size,))
+            fr = jnp.broadcast_to(fr_pA, (self.batch_size,))
             qA, E_qA = vmap(update_A)(
                 self.pA,
                 self.A,
                 outcomes,
                 marginal_beliefs,
                 lr=lr,
+                fr=fr,
             )
             
             agent = tree_at(lambda x: (x.A, x.pA), agent, (E_qA, qA))
@@ -298,12 +300,14 @@ class Agent(Module):
             )
 
             lr = jnp.broadcast_to(lr_pB, (self.batch_size,))
+            fr = jnp.broadcast_to(fr_pB, (self.batch_size,))
             qB, E_qB = vmap(update_B)(
                 self.pB,
                 self.B,
                 joint_beliefs,
                 actions,
-                lr=lr
+                lr=lr,
+                fr=fr
             )
             
             # if you have updated your beliefs about transitions, you need to re-compute the I matrix used for inductive inferenece

@@ -7,7 +7,7 @@ from jax.tree_util import tree_map
 from jaxtyping import Array
 from jax import vmap, nn
 
-def update_obs_likelihood_dirichlet_m(pA_m, obs_m, qs, dependencies_m, lr=1.0):
+def update_obs_likelihood_dirichlet_m(pA_m, obs_m, qs, dependencies_m, lr=1.0, fr =1.0):
     """ JAX version of ``pymdp.learning.update_obs_likelihood_dirichlet_m`` """
     # pA_m - parameters of the dirichlet from the prior
     # pA_m.shape = (no_m x num_states[k] x num_states[j] x ... x num_states[n]) where (k, j, n) are indices of the hidden state factors that are parents of modality m
@@ -25,17 +25,17 @@ def update_obs_likelihood_dirichlet_m(pA_m, obs_m, qs, dependencies_m, lr=1.0):
 
     dfda = vmap(multidimensional_outer)([obs_m] + relevant_factors).sum(axis=0)
 
-    new_pA_m = pA_m + lr * dfda
+    new_pA_m = fr * pA_m + lr * dfda
     A_m = dirichlet_expected_value(new_pA_m)
 
     return new_pA_m, A_m
     
-def update_obs_likelihood_dirichlet(pA, A, obs, qs, *, A_dependencies, onehot_obs, num_obs, lr):
+def update_obs_likelihood_dirichlet(pA, A, obs, qs, *, A_dependencies, onehot_obs, num_obs, lr, fr):
     """ JAX version of ``pymdp.learning.update_obs_likelihood_dirichlet`` """
 
     obs_m = lambda o, dim: nn.one_hot(o, dim) if not onehot_obs else o
     update_A_fn = lambda pA_m, o_m, dim, dependencies_m: None if pA_m is None else update_obs_likelihood_dirichlet_m(
-        pA_m, obs_m(o_m, dim), qs, dependencies_m, lr=lr
+        pA_m, obs_m(o_m, dim), qs, dependencies_m, lr=lr, fr=fr
     )
 
     result = tree_map(
@@ -56,7 +56,7 @@ def update_obs_likelihood_dirichlet(pA, A, obs, qs, *, A_dependencies, onehot_ob
 
     return qA, E_qA
 
-def update_state_transition_dirichlet_f(pB_f, actions_f, joint_qs_f, lr=1.0):
+def update_state_transition_dirichlet_f(pB_f, actions_f, joint_qs_f, lr=1.0, fr=1.0):
     """ JAX version of ``pymdp.learning.update_state_likelihood_dirichlet_f`` """
     # pB_f - parameters of the dirichlet from the prior
     # pB_f.shape = (num_states[f] x num_states[f] x num_actions[f]) where f is the index of the hidden state factor
@@ -72,16 +72,16 @@ def update_state_transition_dirichlet_f(pB_f, actions_f, joint_qs_f, lr=1.0):
 
     joint_qs_f = [joint_qs_f] if isinstance(joint_qs_f, Array) else joint_qs_f
     dfdb = vmap(multidimensional_outer)(joint_qs_f + [actions_f]).sum(axis=0)
-    qB_f = pB_f + lr * dfdb
+    qB_f = fr * pB_f + lr * dfdb
 
     return qB_f, dirichlet_expected_value(qB_f)
 
-def update_state_transition_dirichlet(pB, B, joint_beliefs, actions, *, num_controls, lr):
+def update_state_transition_dirichlet(pB, B, joint_beliefs, actions, *, num_controls, lr,fr):
 
     nf = len(pB)
     actions_onehot_fn = lambda f, dim: nn.one_hot(actions[..., f], dim, axis=-1)
     update_B_f_fn = lambda pB_f, joint_qs_f, f, na: None if pB_f is None else update_state_transition_dirichlet_f(
-        pB_f, actions_onehot_fn(f, na), joint_qs_f, lr=lr
+        pB_f, actions_onehot_fn(f, na), joint_qs_f, lr=lr, fr=fr
     )    
     result = tree_map(
         update_B_f_fn,
