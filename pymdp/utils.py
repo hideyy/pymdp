@@ -571,7 +571,28 @@ def plot_likelihood(A, title=""):
     plt.title(title)
     plt.show()
 
+def plot_likelihood_figsize(A, title="", figsize=(12, 8)):
+    """
+    Utility function that shows a heatmap of a 2-D likelihood (hidden causes in the columns, observations in the rows),
+    with hotter colors indicating higher probability.
 
+    Parameters
+    ----------
+    A : numpy.ndarray
+        The likelihood matrix to visualize
+    title : str, optional
+        Title of the plot
+    figsize : tuple, optional
+        Figure size in inches (width, height)
+    """
+
+    plt.figure(figsize=figsize)
+    ax = sns.heatmap(A, cmap="OrRd", linewidth=2.5, annot=False, fmt='.2f', cbar_kws={'label': 'Probability'})
+    plt.xticks(range(A.shape[1]+1))
+    plt.yticks(range(A.shape[0]+1))
+    plt.title(title)
+    plt.tight_layout()
+    plt.show()
     
    
 
