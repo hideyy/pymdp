@@ -4,7 +4,7 @@
 
 import jax.numpy as jnp
 from .algos import run_factorized_fpi, run_mmp, run_vmp, run_mmp_vfe, run_mmp_vfe_policies, run_mmp2
-from jax import tree_util as jtu, lax
+from jax import tree_util as jtu, lax ,vmap
 from jax.experimental.sparse._base import JAXSparse
 from jax.experimental import sparse
 from jaxtyping import Array, ArrayLike

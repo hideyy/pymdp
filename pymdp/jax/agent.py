@@ -18,7 +18,7 @@ from typing import List, Optional
 from jaxtyping import Array
 from functools import partial
 
-from pymdp.maths import *
+from pymdp.jax.maths import *
 
 class Agent(Module):
     """ 
