@@ -532,6 +532,7 @@ def get_mmp_messages_kld(ln_B, B, qs, ln_prior, B_deps):
         B_marg = []
         for i in inv_deps:
             b = B[i]
+            #b=jnp.array(b)##Fpi計算2のため追加
             keep_dims = (0, 1, 2 + B_deps[i].index(f))
             dims = []
             idxs = []

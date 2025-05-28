@@ -545,43 +545,137 @@ def update_posterior_states_vfe_policies2(
             qs = run_vmp(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter) 
         def run_mmp_vfe_single(b):
             b=list(b)
-            return run_mmp_vfe(A, b, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter)
-        """ def run_mmp_vfe_single(b):
             
-            b=list(b)
-            #print(b)
-            return run_mmp_vfe_policies(A, b, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter, policy_len=t) """
+            return run_mmp_vfe(A, b, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter)
+        
+        """ def run_mmp_vfe_single(b):
+            # bがリストの場合、各要素を個別に処理
+            if isinstance(b, list):
+                # 各要素を個別に処理
+                results = []
+                for b_i in b:
+                    b_i_array = jnp.array(b_i)
+                    result = run_mmp_vfe(A, [b_i_array], obs, prior, A_dependencies, B_dependencies, num_iter=num_iter)
+                    results.append(result)
+                # 結果を結合
+                qs, err, vfe, kld, bs, un = zip(*results)
+                return qs, err, vfe, kld, bs, un
+            else:
+                return run_mmp_vfe(A, b, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter) """
+       
         if method == 'mmp':
             # Use vmap to parallelize the function over the batch dimension
             if B is not None:
             #qs, err, vfe, kld, bs, un = vmap(run_mmp_vfe_single)(jnp.array(B))
                 if past_actions.shape[0]>=t:
                     #print('run_mmp_vfe_single')
+                    #print(f"B: {B}")
                     # ベクトル化
-                    """results = vmap(run_mmp_vfe_partial)(B) """
-                    B=jnp.array(B)
+                    #results = vmap(run_mmp_vfe_partial)(B) 
+                    #print(B)
+                    results = [run_mmp_vfe_single(b) for b in B]
+                    qs, err, vfe, kld, bs, un = zip(*results)
+                    #B = [jnp.array(b_i) for b_i in B]
+                    #qs, err, vfe, kld, bs, un = vmap(run_mmp_vfe_single)(B_list)
+                    # B_list = [[jnp.array(b_ij) 
+                    # for b_ij in b_i] 
+                    # for b_i in B]
+                    #qs, err, vfe, kld, bs, un = vmap(run_mmp_vfe_single)(B)
+                    #qs, err, vfe, kld, bs, un = vmap(run_mmp_vfe_single,(0,))(B)
+                    """ B=jnp.array(B)##この書き方だと二因子以上かつBの形状が異なる場合にエラーとなる
+                    qs, err, vfe, kld, bs, un = vmap(run_mmp_vfe_single,(0,))(B) """
                     #print(B.shape)
+                    """ results = []
+                    for b_i in B:
+                        # 各要素を個別に処理
+                        result = run_mmp_vfe_single(b_i)
+                        results.append(result)
+                    
+                    # 結果を結合
+                    qs, err, vfe, kld, bs, un = zip(*results) """
+
+
                     """ results = vmap(run_mmp_vfe_single,(0,))(B)
                     print(results)
                     qs, err, vfe, kld, bs, un = zip(*results) """
-                    qs, err, vfe, kld, bs, un = vmap(run_mmp_vfe_single,(0,))(B)
-                    #results = [run_mmp_vfe_single(b) for b in B]
-                    qs=jnp.array(qs)
-                    #print(qs.shape)
-                    qs=jnp.moveaxis(qs, 0, 1)
-                    #print(qs.shape)
-                    #realqs=qs[selected_policy[0]]
-                    #print(len(vfe))
-                    #print(vfe[0])
-                    #print(vfe[0].shape)
-                    #print(qs[0][0].shape)
                     
-                    vfe=jtu.tree_map(lambda y: y.sum(2),vfe)
+                    #qs, err, vfe, kld, bs, un = vmap(run_mmp_vfe_single)(B)#リストのまま実行
+                    
+                    #results = [run_mmp_vfe_single(b) for b in B]
+                    """ qs=jnp.array(qs)
+                    #print(qs.shape)
+                    qs=jnp.moveaxis(qs, 0, 1) """
+                    #print(f"qs: {qs}")#ポリシー，因子，バッチ？，時刻，状態数
+                    # qsの各要素を個別に処理
+                    """ qs_arrays = []
+                    for q in qs:
+                        if isinstance(q, (list, tuple)):
+                            # 各サブ配列を個別に処理
+                            sub_arrays = [jnp.asarray(sub_q) for sub_q in q]
+                            # 必要に応じて形状を調整
+                            sub_arrays = [sub_q.reshape(-1, 1) if len(sub_q.shape) == 1 else sub_q for sub_q in sub_arrays]
+                            qs_arrays.append(sub_arrays)
+                        else:
+                            # 単一の配列の場合
+                            q_array = jnp.asarray(q)
+                            if len(q_array.shape) == 1:
+                                q_array = q_array.reshape(-1, 1)
+                            qs_arrays.append(q_array)
+
+                    print(f"qs_arrays: {qs_arrays}")
+
+                    # 軸の順序を調整（リストの場合は再帰的に処理）
+                    def adjust_axes(q):
+                        if isinstance(q, list):
+                            return [adjust_axes(sub_q) for sub_q in q]
+                        else:
+                            return jnp.moveaxis(q, 0, 1) if len(q.shape) > 1 else q
+
+                    qs = [adjust_axes(q) for q in qs_arrays]
+
+                    # 軸の順序を調整
+                    qs = [jnp.moveaxis(q, 0, 1) if len(q.shape) > 1 else q for q in qs_arrays] """
+
+                    #print(f"vfe: {vfe}")
+                    """ vfe=jtu.tree_map(lambda x:(lambda y: y.sum(2),x),vfe)
+                    kld=jtu.tree_map(lambda x:(lambda y: y.sum(2),x),kld)
+                    bs=jtu.tree_map(lambda x:(lambda y: y.sum(2),x),bs)
+                    un=jtu.tree_map(lambda x:(lambda y: y.sum(2),x),un) """
+                    # タプルをリストに変換
+                    vfe = list(vfe)
+                    kld = list(kld)
+                    bs = list(bs)
+                    un = list(un)
+
+                    # その後で操作を行う
+                    for i in range(len(vfe)):
+                        vfe[i] = jtu.tree_map(lambda y: y.sum(1), vfe[i])
+                        kld[i] = jtu.tree_map(lambda y: y.sum(1), kld[i])
+                        bs[i] = jtu.tree_map(lambda y: y.sum(1), bs[i])
+                        un[i] = jtu.tree_map(lambda y: y.sum(1), un[i])
+
+                    #print(f"vfe: {vfe}")
+                    vfe = [list(p) for p in zip(*vfe)]#ポリシー，因子，，，から，因子，ポリシー，バッチ？，時点に変更
+                    #print(f"vfe: {vfe}")
+                    kld = [list(p) for p in zip(*kld)]
+                    bs = [list(p) for p in zip(*bs)]
+                    un = [list(p) for p in zip(*un)]
+
+                    qs = [list(p) for p in zip(*qs)]
+                    err = [list(p) for p in zip(*err)]
+
+                    """ print(f"vfe: {vfe}")
+                    for i in range(len(vfe)):
+                        print(f"vfe[i]: {vfe[i]}")
+                        vfe[i]=jtu.tree_map(lambda y: y.sum(1),vfe[i])
+                        kld[i]=jtu.tree_map(lambda y: y.sum(1),kld[i])
+                        bs[i]=jtu.tree_map(lambda y: y.sum(1),bs[i])
+                        un[i]=jtu.tree_map(lambda y: y.sum(1),un[i]) """
+                    
+                    """ vfe=jtu.tree_map(lambda y: y.sum(2),vfe)
                     kld=jtu.tree_map(lambda y: y.sum(2),kld)
                     bs=jtu.tree_map(lambda y: y.sum(2),bs)
-                    un=jtu.tree_map(lambda y: y.sum(2),un)
-                    
-
+                    un=jtu.tree_map(lambda y: y.sum(2),un) """
                     qs = list(qs)
                     #print(len(qs))
                     #print(qs[0].shape)
@@ -616,10 +710,10 @@ def update_posterior_states_vfe_policies2(
         else:
             #qs_hist = realqs
             qs_hist=qs
-    vfe = jnp.array(vfe)
+    """ vfe = jnp.array(vfe)
     kld = jnp.array(kld)
     bs = jnp.array(bs)
-    un = jnp.array(un) 
+    un = jnp.array(un)  """
     
     return qs_hist, err, vfe, kld, bs, un
 

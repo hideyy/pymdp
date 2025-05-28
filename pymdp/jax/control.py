@@ -93,7 +93,8 @@ def sample_policy(policies, q_pi, action_selection="deterministic", alpha = 16.0
         log_p_policies = log_stable(q_pi) * alpha
         policy_idx = jr.categorical(rng_key, log_p_policies)
 
-    selected_multiaction = policies[policy_idx, 0]
+    ##selected_multiaction = policies[policy_idx, 0]
+    selected_multiaction = jnp.take(policies, policy_idx, axis=0)[0]##25/05/26宮口修正
     return selected_multiaction
 
 def construct_policies(num_states, num_controls = None, policy_len=1, control_fac_idx=None):
@@ -752,6 +753,7 @@ def update_posterior_policies_inductive_efe_qs_pi(policy_matrix, qs_init_pi, A, 
     
     #vmapmatrix=jtu.tree_map(lambda x,y:(x,list(y)),qs_init_pi, list(policy_matrix))
     #results = vmap(compute_G_fixed_states)(vmapmatrix)
+    #print(f"qs_init_pi: {qs_init_pi}")
     results = vmap(compute_G_fixed_states)(jnp.array(qs_init_pi),policy_matrix)
     
     neg_efe_all_policies = results[0]  # 各ポリシーの負の期待自由エネルギー
@@ -856,21 +858,25 @@ def compute_expected_state_obs(qs_prior, A, B, u_t, A_dependencies, B_dependenci
 
     return qs_next,jtu.tree_map(compute_expected_obs_modality, A, list(range(len(A))))
 
-def update_posterior_policies_inductive_efe_qs_pi_old(policy_matrix, qs_init_pi, A, B, C, E, pA, pB, A_dependencies, B_dependencies, I, gamma=16.0, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=True):
+def update_posterior_policies_inductive_efe_qs_pi2(policy_matrix, qs_init_pi, A, B, C, E, pA, pB, A_dependencies, B_dependencies, I, gamma=16.0, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=True):
     # policy --> n_levels_factor_f x 1
     # factor --> n_levels_factor_f x n_policies
     """ print(qs_init_pi)
     print(policy_matrix) """
     ## vmap across policies
-    compute_G_fixed_states = partial(compute_G_policy_inductive_efe_qs_pi_old, A, B, C, pA, pB, A_dependencies, B_dependencies, I, inductive_epsilon=inductive_epsilon,
+    compute_G_fixed_states = partial(compute_G_policy_inductive_efe_qs_pi2, A, B, C, pA, pB, A_dependencies, B_dependencies, I, qs_init_pi,inductive_epsilon=inductive_epsilon,
                                      use_utility=use_utility,  use_states_info_gain=use_states_info_gain, use_param_info_gain=use_param_info_gain, use_inductive=use_inductive)
 
     # policies needs to be an NDarray of shape (n_policies, n_timepoints, n_control_factors)
-    
+    #print(f"qs_init_pi: {qs_init_pi}")#ポリシー，因子，状態
+    #print(f"policy_matrix: {policy_matrix}")#ポリシー，時点？，因子
     #vmapmatrix=jtu.tree_map(lambda x,y:(x,list(y)),qs_init_pi, list(policy_matrix))
     #results = vmap(compute_G_fixed_states)(vmapmatrix)
-    results = vmap(compute_G_fixed_states)(jnp.array(qs_init_pi),policy_matrix)
-    
+    ##results = vmap(compute_G_fixed_states)(jnp.array(qs_init_pi),policy_matrix)
+    #results = vmap(compute_G_fixed_states)(qs_init_pi,policy_matrix, in_axes=(0,0))
+    policy_indices = jnp.arange(policy_matrix.shape[0])
+    results = vmap(lambda p, i: compute_G_fixed_states(p, policy_idx=i))(policy_matrix, policy_indices)
+    #results = vmap(compute_G_fixed_states)(policy_matrix)
     neg_efe_all_policies = results[0]  # 各ポリシーの負の期待自由エネルギー
     PBS_a_p = results[1]  # 状態情報利得
     PKLD_a_p = results[2]  # 状態情報利得
@@ -887,7 +893,7 @@ def update_posterior_policies_inductive_efe_qs_pi_old(policy_matrix, qs_init_pi,
 
     return nn.softmax(gamma * neg_efe_all_policies + log_stable(E)), neg_efe_all_policies, PBS_a_p, PKLD_a_p, PFE_a_p, oRisk_a_p, PBS_pA_a_p, PBS_pB_a_p
 
-def compute_G_policy_inductive_efe_qs_pi_old( A, B, C, pA, pB, A_dependencies, B_dependencies, I, qs_init, policy_i, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=False):
+def compute_G_policy_inductive_efe_qs_pi2( A, B, C, pA, pB, A_dependencies, B_dependencies, I, qs_init, policy_i,policy_idx=None, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=False):
     """ 
     Write a version of compute_G_policy that does the same computations as `compute_G_policy` but using `lax.scan` instead of a for loop.
     This one further adds computations used for inductive planning.
@@ -897,7 +903,8 @@ def compute_G_policy_inductive_efe_qs_pi_old( A, B, C, pA, pB, A_dependencies, B
 
         #qs, neg_G = carry
         qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,inductive_value = carry
-
+        
+        
         qs_next = compute_expected_state(qs, B, policy_i[t], B_dependencies)
 
         qo = compute_expected_obs(qs_next, A, A_dependencies)
@@ -912,7 +919,7 @@ def compute_G_policy_inductive_efe_qs_pi_old( A, B, C, pA, pB, A_dependencies, B
         #utility = compute_expected_utility(t, qo, C) if use_utility else 0.
 
         inductive_value += calc_inductive_value_t(qs_init, qs_next, I, epsilon=inductive_epsilon) if use_inductive else 0.
-        print(qs_next)
+        #print(qs_next)
         
         
         if pA is not None:
@@ -928,9 +935,26 @@ def compute_G_policy_inductive_efe_qs_pi_old( A, B, C, pA, pB, A_dependencies, B
 
         neg_G = info_gain + predicted_KLD - predicted_F - oRisk + param_info_gainA + param_info_gainB + inductive_value
         #neg_G += inductive_value + utility 
-        return (jnp.array(qs_next), neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,inductive_value), None
+        return (qs_next, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,inductive_value), None
+    #print(f"qs:",qs_init)#ポリシー，因子
+        # 各因子のbeliefsから現在のポリシーのbeliefsを取得
+    def get_qs_pi(i):
+        return qs_init[i]
 
-    qs = qs_init
+    qs_pi = lax.cond(
+        policy_idx == 0,
+        lambda: get_qs_pi(0),
+        lambda: lax.cond(
+            policy_idx == 1,
+            lambda: get_qs_pi(1),
+            lambda: get_qs_pi(2)
+        )
+    )
+    #qs_pi = lax.switch(policy_idx, qs)
+        # qs_pi = lax.index_in_dim(qs, policy_idx, axis=0)
+    #qs_pi = jnp.take(qs, policy_idx, axis=0)
+    #print(f"qs_pi:",qs_pi)
+    qs = qs_pi
     #print(qs)
     #print(policy_i)
     neg_G = 0.

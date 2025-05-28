@@ -927,7 +927,7 @@ class Agent(Module):
         _,K, t,_= policies.shape
         #print(t)
         #print(past_actions.shape)
-        selected_policy=-1
+        """ selected_policy=-1
         if past_actions is not None:
             #print(past_actions.shape)
             if past_actions.shape[1]>=t:
@@ -946,7 +946,7 @@ class Agent(Module):
             else:
                 selected_policy=-1
         else:
-            selected_policy=-1
+            selected_policy=-1 """
         
         infer_states_policies = partial(
             inference.update_posterior_states_vfe_policies2,
@@ -975,7 +975,8 @@ class Agent(Module):
         """ if selected_policy != -1:
             output=output[selected_policy] """
         #print(output)
-        if past_actions is not None:
+        ##実際に選択した行動についてのqsを出力する場合⇓
+        """ if past_actions is not None:
             if past_actions.shape[1]>=t:
                 #output=output[selected_policy]
                 #print(jnp.array(output).shape)
@@ -986,7 +987,7 @@ class Agent(Module):
                 #print(output.shape)
                 #print(policy_mask)
         #output = jnp.where(selected_policy != -1, jnp.array(jtu.tree_map(lambda x: x[0],output)[selected_policy]), jnp.array(output))
-        output=list(output)
+        output=list(output) """
         #print(output)
         #print(len(output))
             #output=jtu.tree_map(lambda x: jnp.expand_dims(x, -1).astype(jnp.float32), output) #vfe=vfe[0].sum(2)
@@ -1001,7 +1002,7 @@ class Agent(Module):
         kld=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(2),x),kld)
         bs=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(2),x),bs)
         un=jtu.tree_map(lambda x: jtu.tree_map(lambda y: y.sum(2),x),un) """
-       
+        
 
         return output, err, vfe, kld, bs, un
 
@@ -1099,7 +1100,7 @@ class Agent(Module):
 
         return q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB
 
-    def infer_policies_efe_qs_pi(self, qs_pi: List):
+    def infer_policies_efe_qs_pi(self, qs_pi: List,mode=1):
         """
         Perform policy inference by optimizing a posterior (categorical) distribution over policies.
         This distribution is computed as the softmax of ``G * gamma + lnE`` where ``G`` is the negative expected
@@ -1117,10 +1118,13 @@ class Agent(Module):
         #q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB=jnp.where(len(qs_pi)==1,jnp.array(self.infer_policies_efe(qs_pi)),
                                                                  #jnp.array(self.infer_policies_efe_qs_pi_sub(qs_pi)))
 
-        if len(qs_pi)==1:
+        if len(qs_pi[0])==1:##len(qs_pi)==1だと一因子以外のとき，1時刻目をはじけない，
             q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB=self.infer_policies_efe(qs_pi)
-        else:
-            q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB=self.infer_policies_efe_qs_pi_sub(qs_pi)
+        elif mode==1:
+            q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB=self.infer_policies_efe_qs_pi_sub(qs_pi)##未来延長の場合？
+        elif mode==2:
+            q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB=self.infer_policies_efe_qs_pi_sub2(qs_pi)##未来延長の場合？
+        
         """ q_pi=list(q_pi)
         G=list(G)
         PBS=list(PBS)
@@ -1135,18 +1139,23 @@ class Agent(Module):
         agent=self
         if reflect_len is None:
             reflect_len=self.policy_len
+
+        vfe_pi2=jnp.array(vfe_pi)
+        #print(f"vfe_pi2:",vfe_pi2)
         def scan_fn(carry, iter):
             q_pi, q_pi_0, gamma, Gerror, qb=carry
             #print(vfe_pi[0].shape[0])
-            if vfe_pi[0].shape[1]==neg_efe[0].shape[0]:
+            vfe_pi2=jnp.array(vfe_pi)
+            #print(f"vfe_pi2:",vfe_pi2)
+            if vfe_pi2.shape[1]==neg_efe[0].shape[0]:
                 #print("pi posterior")
                 #print(vfe_pi[0][0,:,:])
                 #print(reflect_len)
                 #print(vfe_pi[0][:,:,-reflect_len:])
                 
-                vfe_pi2=vfe_pi[0][:,:,-reflect_len:]
-                
-                vfe_pi2=jnp.sum(vfe_pi2, axis=-1).flatten()
+                vfe_pi2=vfe_pi2[:,:,:,-reflect_len:]
+                vfe_pi2 =jnp.sum(vfe_pi2, axis=(0,2,3))
+                #vfe_pi2=jnp.sum(vfe_pi2, axis=-1).flatten()
                 #print(vfe_pi2)
                 q_pi=nn.softmax(gamma * neg_efe + log_stable(self.E) - vfe_pi2)
             else:
@@ -1188,6 +1197,51 @@ class Agent(Module):
             #print(Bayesian_model_avaraging_full)
             K, t,_= self.policies.shape
             Bayesian_model_avaraging = jtu.tree_map( lambda x: x[:, :-t], Bayesian_model_avaraging_full)
+        else:
+            Bayesian_model_avaraging=qs_pi
+        return Bayesian_model_avaraging
+    
+    def calc_bayesian_model_averaging2(self, qs_pi, q_pi):
+        #print(f"len(qs_pi): {len(qs_pi[0])}")
+        #print(f"self.policies.shape[0]: {self.policies.shape[0]}")
+        if len(qs_pi[0])==self.policies.shape[0]:##状態因子数＝ポリシー数だとエラー？
+        #if len(qs_pi)>1:##状態因子が複数のとき用にfix必要
+            ##beliefs = jnp.array(qs_pi)
+            ##Bayesian_model_avaraging_full_old = list(jnp.mean(beliefs, axis=0))
+            ##Bayesian_model_avaraging_full=jnp.tensordot(q_pi, beliefs, axes=(1, 0))
+            ##Bayesian_model_avaraging_full = list(Bayesian_model_avaraging_full[0])
+            #print(f"qs_pi: {qs_pi}")
+            #print(f"q_pi: {q_pi}")
+            q_pi=jnp.array(q_pi)
+            beliefs = qs_pi
+            #Bayesian_model_avaraging_full=jnp.zeros(beliefs[0].shape)
+            Bayesian_model_avaraging_full=None
+            """ for i in range(len(beliefs)):
+                if Bayesian_model_avaraging_full is None:
+                    Bayesian_model_avaraging_full=q_pi[i]*beliefs[i]
+                else:
+                    Bayesian_model_avaraging_full+=q_pi[i]*beliefs[i] """
+            ##Bayesian_model_avaraging_full=jnp.tensordot(q_pi, beliefs, axes=(0, 0))
+            #Bayesian_model_avaraging_full = list(Bayesian_model_avaraging_full[0])
+            """ Bayesian_model_avaraging_full = jtu.tree_map(
+            lambda beliefs_f: (
+                print(f"beliefs_f shape: {beliefs_f.shape}, beliefs_f: {beliefs_f}"),
+                jnp.tensordot(q_pi, beliefs_f, axes=(0, 0))
+                )[1],  # printの結果を無視して、tensordotの結果のみを返す
+                qs_pi
+                ) """#1,2,100
+            #Bayesian_model_avaraging_full=jnp.tensordot(q_pi, beliefs, axes=(0, 1))
+            for i in range(len(beliefs)):
+                beliefs[i]=jnp.array(beliefs[i])
+            #beliefs=jtu.tree_map(lambda beliefs_f:jnp.array(beliefs_f),qs_pi)
+            #print(f"beliefs: {beliefs}")
+            Bayesian_model_avaraging_full=jtu.tree_map(lambda beliefs_f:jnp.tensordot(q_pi, beliefs_f, axes=(0, 0)),beliefs)
+            #print(f"Bayesian_model_avaraging_full: {Bayesian_model_avaraging_full}")
+            #print(Bayesian_model_avaraging_full_old)
+            #print(Bayesian_model_avaraging_full)
+            ##K, t,_= self.policies.shape
+            #Bayesian_model_avaraging = jtu.tree_map( lambda x: x[:, :-t], Bayesian_model_avaraging_full)
+            Bayesian_model_avaraging=Bayesian_model_avaraging_full
         else:
             Bayesian_model_avaraging=qs_pi
         return Bayesian_model_avaraging
@@ -1399,7 +1453,7 @@ class Agent(Module):
         kld = inference.calc_KLD(past_qs,current_qs)
         return kld
     
-    def infer_policies_efe_qs_pi_sub_old(self, qs_pi: List):
+    def infer_policies_efe_qs_pi_sub2(self, qs_pi: List):
         """
         Perform policy inference by optimizing a posterior (categorical) distribution over policies.
         This distribution is computed as the softmax of ``G * gamma + lnE`` where ``G`` is the negative expected
@@ -1416,13 +1470,15 @@ class Agent(Module):
         #latest_belief = jtu.tree_map(lambda x: x[:, -1], qs) 
         policy_len=self.policy_len
         #print(qs_pi[0].shape)
-        latest_belief = jtu.tree_map(lambda x: x[:, :,-1-policy_len,:],qs_pi)
+        latest_belief = jtu.tree_map(lambda x: x[:, :,-1,:],qs_pi)#jtu.tree_map(lambda x: x[:, :,-1-policy_len,:],qs_pi)
         #print(latest_belief[0].shape)
         #latest_belief = jtu.tree_map(lambda y:jtu.tree_map(lambda x: x[:, -1-policy_len], y),qs_pi) # only get the posterior belief held at the current timepoint
+        latest_belief = [list(p) for p in zip(*latest_belief)]
+        #print(f"latest_belief: {latest_belief}")
 
         #latest_belief = jtu.tree_map(lambda y:jtu.tree_map(lambda x: x[:, -1], y),qs_pi)
         infer_policies = partial(
-            control.update_posterior_policies_inductive_efe_qs_pi_old,
+            control.update_posterior_policies_inductive_efe_qs_pi2,
             self.policies,
             A_dependencies=self.A_dependencies,
             B_dependencies=self.B_dependencies,
