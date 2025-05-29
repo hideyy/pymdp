@@ -544,7 +544,7 @@ class Agent(Module):
             method=self.inference_algo
         )#並列処理のための関数の宣言;Declaring functions for parallel processing
         
-        output, err, vfe, S_Hqs, bs, un = vmap(infer_states)(  #output, err, vfe, kld, bs, un 
+        output, err, vfe, kld2, bs, un = vmap(infer_states)(  #output, err, vfe, kld, bs, un 
             A,
             self.B,
             o_vec,
@@ -555,12 +555,12 @@ class Agent(Module):
         #vfe=vfe[0].sum(2)
         vfe=jtu.tree_map(lambda x: x.sum(2),vfe)#状態量の次元に沿ってVFEを足し上げ．;Add up VFE along the dimensions of the state variables.
         err=jtu.tree_map(lambda x: x.sum(2),err)
-        S_Hqs=jtu.tree_map(lambda x: x.sum(2),S_Hqs)
+        kld2=jtu.tree_map(lambda x: x.sum(2),kld2)
         #kld=jtu.tree_map(lambda x: x.sum(2),kld)
         bs=jtu.tree_map(lambda x: x.sum(2),bs)
         un=jtu.tree_map(lambda x: x.sum(2),un)
 
-        return output, err, vfe, S_Hqs, bs, un#output, err, vfe, kld(S_Hqs)(po), bs, un
+        return output, err, vfe, kld2, bs, un#output, err, vfe, kld(S_Hqs)(po), bs, un
     
     #@vmap
     def calc_KLD_past_currentqs(self, empirical_prior, past_qs, current_qs):
