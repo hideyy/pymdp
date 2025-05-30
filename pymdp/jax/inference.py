@@ -490,11 +490,11 @@ def update_posterior_states_vfe_policies2(
                 #print(nf)#1,factor_number
                 #print('actions_tree')
                 actions_tree = [past_actions[:, i] for i in range(nf)]
-                #print(actions_tree[0].shape)
+                ##print(actions_tree[0].shape)
                 
                 #realaction_tree=jtu.tree_map(lambda x: x[-t:] , actions_tree)##
                 actions_tree = jtu.tree_map(lambda x: x[0:-t] , actions_tree)##
-                
+                ##print(actions_tree[0].shape)
                 #print(actions_tree)
                 #print(len(actions_tree))
                 #print(actions_tree[0].shape)
@@ -503,10 +503,18 @@ def update_posterior_states_vfe_policies2(
                 
                 actions_tree = jnp.asarray(actions_tree) # Convert to ndarray##
                 #print(actions_tree[0].shape)
+                """ print(f"K",K)
+                print(f"policies",policies)
+                print(f"policies[0]",policies[0])
+                print(f"policies[1]",policies[1])
+                print(f"policies[2]",policies[2]) """
+
                 policies_tree=[jnp.asarray([policies[k][:, i] for i in range(nf)]) for k in range(K)]
                 #print(policies_tree[0].shape)
+
                 actions_tree = [jnp.concatenate([actions_tree, policies_tree[k]], axis=1) for k in range(K)]
-                #print(actions_tree[0].shape)
+                ##print(actions_tree[0].shape)
+                #print(actions_tree)
                 #print(policies_tree[0][0])
                 #print(policies[0])
                 #print(policies_tree[2])
