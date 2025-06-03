@@ -253,7 +253,7 @@ def get_model_dimensions_from_labels(model_labels):
 
 def norm_dist(dist):
     """ Normalizes a Categorical probability distribution (or set of them) assuming sufficient statistics are stored in leading dimension"""
-    return np.divide(dist, dist.sum(axis=0))
+    return np.divide(dist, dist.sum(axis=0) + 1e-10)##25/05/30宮口修正
 
 def norm_dist_obj_arr(obj_arr):
     """ Normalizes a multi-factor or -modality collection of Categorical probability distributions, assuming sufficient statistics of each conditional distribution

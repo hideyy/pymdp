@@ -1135,7 +1135,7 @@ class Agent(Module):
         PBS_pB=list(PBS_pB) """
         return q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB
     
-    def infer_policies_precision2(self, neg_efe, vfe_pi, beta=1, reflect_len=None):
+    def infer_policies_precision2(self, neg_efe, vfe_pi, beta=1, reflect_len=None, gamma_update=True):
         agent=self
         if reflect_len is None:
             reflect_len=self.policy_len
@@ -1146,14 +1146,16 @@ class Agent(Module):
             q_pi, q_pi_0, gamma, Gerror, qb=carry
             #print(vfe_pi[0].shape[0])
             vfe_pi2=jnp.array(vfe_pi)
-            #print(f"vfe_pi2:",vfe_pi2)
+            #print(f"vfe_pi2:",vfe_pi2.shape)
+            #print(f"neg_efe:",neg_efe[0].shape)
             if vfe_pi2.shape[1]==neg_efe[0].shape[0]:
                 #print("pi posterior")
                 #print(vfe_pi[0][0,:,:])
                 #print(reflect_len)
                 #print(vfe_pi[0][:,:,-reflect_len:])
                 
-                vfe_pi2=vfe_pi2[:,:,:,-reflect_len:]
+                ##vfe_pi2=vfe_pi2[:,:,:,-reflect_len:]##
+
                 vfe_pi2 =jnp.sum(vfe_pi2, axis=(0,2,3))
                 #vfe_pi2=jnp.sum(vfe_pi2, axis=-1).flatten()
                 #print(vfe_pi2)
@@ -1170,7 +1172,11 @@ class Agent(Module):
             dFdg=qb-beta+Gerror
             #print(dFdg)
             qb=qb-dFdg/2
-            gamma=1/qb
+            if gamma_update:
+                gamma=1/qb
+            else:
+                gamma=self.gamma
+            #gamma=1/qb
             return (q_pi, q_pi_0, gamma, Gerror, qb), None
         gamma=self.gamma
         q_pi=nn.softmax(gamma * neg_efe + log_stable(self.E))
@@ -1182,7 +1188,8 @@ class Agent(Module):
         output, _ = lax.scan(scan_fn, (q_pi, q_pi_0, gamma, Gerror, qb), jnp.arange(self.num_iter))
         q_pi, q_pi_0, gamma, Gerror, qb = output
         #self.gamma=gamma
-        agent = tree_at(lambda x: x.gamma, agent, gamma)
+        if gamma_update:
+            agent = tree_at(lambda x: x.gamma, agent, gamma)
         return agent, q_pi, q_pi_0, gamma, Gerror
     
     def calc_bayesian_model_averaging(self, qs_pi, q_pi):
