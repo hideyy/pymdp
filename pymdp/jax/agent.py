@@ -1509,3 +1509,80 @@ class Agent(Module):
         )
 
         return q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB
+    
+    def infer_states_vfe_set_prior(self, observations, empirical_prior, *, past_actions=None, qs_hist=None, mask=None, expected_states=None):#empirical_priorにもqs_histを入れる
+        """
+        Update approximate posterior over hidden states by solving variational inference problem, given an observation.
+
+        Parameters
+        ----------
+        observations: ``list`` or ``tuple`` of ints
+            The observation input. Each entry ``observation[m]`` stores one-hot vectors representing the observations for modality ``m``.
+        past_actions: ``list`` or ``tuple`` of ints
+            The action input. Each entry ``past_actions[f]`` stores indices (or one-hots?) representing the actions for control factor ``f``.
+        empirical_prior: ``list`` or ``tuple`` of ``jax.numpy.ndarray`` of dtype object
+            Empirical prior beliefs over hidden states. Depending on the inference algorithm chosen, the resulting ``empirical_prior`` variable may be a matrix (or list of matrices) 
+            of additional dimensions to encode extra conditioning variables like timepoint and policy.
+        Returns
+        ---------
+        qs: ``numpy.ndarray`` of dtype object
+            Posterior beliefs over hidden states. Depending on the inference algorithm chosen, the resulting ``qs`` variable will have additional sub-structure to reflect whether
+            beliefs are additionally conditioned on timepoint and policy.
+            For example, in case the ``self.inference_algo == 'MMP' `` indexing structure is policy->timepoint-->factor, so that 
+            ``qs[p_idx][t_idx][f_idx]`` refers to beliefs about marginal factor ``f_idx`` expected under policy ``p_idx`` 
+            at timepoint ``t_idx``.
+        """
+
+        """ if expected_states is not None and qs_hist is not None:
+            expected_states = jtu.tree_map(lambda x: x[None, ...], expected_states) # 2次元配列を3次元配列に変換
+                #print("combine")
+            past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate((x, y), axis=1), qs_hist, expected_states)
+            #past_beliefs = jtu.tree_map(lambda x: x.squeeze(0), past_beliefs)  # 3次元配列を2次元配列に変換
+        else:
+            past_beliefs = empirical_prior """
+        #print(past_beliefs[0].shape)
+        if not self.onehot_obs:
+            #print("convert to distribution")
+            o_vec = [nn.one_hot(o, self.num_obs[m]) for m, o in enumerate(observations)]#観測値のワンホットベクトル化; One-hot vectorization of observed values
+            #print(o_vec)
+        else:
+            o_vec = observations
+        
+        A = self.A
+        if mask is not None:
+            for i, m in enumerate(mask):
+                o_vec[i] = m * o_vec[i] + (1 - m) * jnp.ones_like(o_vec[i]) / self.num_obs[i]
+                A[i] = m * A[i] + (1 - m) * jnp.ones_like(A[i]) / self.num_obs[i]
+
+        infer_states = partial(
+            inference.update_posterior_states_vfe_set_prior,
+            A_dependencies=self.A_dependencies,
+            B_dependencies=self.B_dependencies,
+            num_iter=self.num_iter,
+            method=self.inference_algo
+            
+        )#並列処理のための関数の宣言;Declaring functions for parallel processing
+        
+        output, err, vfe, kld2, bs, un, qs_1step, err_1step, vfe_1step, kld2_1step, bs_1step, un_1step = vmap(infer_states)(  #output, err, vfe, kld, bs, un 
+            A,
+            self.B,
+            o_vec,
+            past_actions,
+            prior=empirical_prior,
+            qs_hist=qs_hist,
+            expected_states=expected_states
+        )#並列計算で認識分布（output）やvfeの計算;Parallel computation of recognition distribution (output) and vfe
+        #vfe=vfe[0].sum(2)
+        vfe=jtu.tree_map(lambda x: x.sum(2),vfe)#状態量の次元に沿ってVFEを足し上げ．;Add up VFE along the dimensions of the state variables.
+        err=jtu.tree_map(lambda x: x.sum(2),err)
+        kld2=jtu.tree_map(lambda x: x.sum(2),kld2)
+        #kld=jtu.tree_map(lambda x: x.sum(2),kld)
+        bs=jtu.tree_map(lambda x: x.sum(2),bs)
+        un=jtu.tree_map(lambda x: x.sum(2),un)
+        vfe_1step=jtu.tree_map(lambda x: x.sum(2),vfe_1step)
+        err_1step=jtu.tree_map(lambda x: x.sum(2),err_1step)
+        kld2_1step=jtu.tree_map(lambda x: x.sum(2),kld2_1step)
+        bs_1step=jtu.tree_map(lambda x: x.sum(2),bs_1step)
+        un_1step=jtu.tree_map(lambda x: x.sum(2),un_1step)
+
+        return output, err, vfe, kld2, bs, un, qs_1step, err_1step, vfe_1step, kld2_1step, bs_1step, un_1step#output, err, vfe, kld(S_Hqs)(po), bs, un

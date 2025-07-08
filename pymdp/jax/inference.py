@@ -3,7 +3,7 @@
 # pylint: disable=no-member
 
 import jax.numpy as jnp
-from .algos import run_factorized_fpi, run_mmp, run_vmp, run_mmp_vfe, run_mmp_vfe_policies, run_mmp2
+from .algos import run_factorized_fpi, run_mmp, run_vmp, run_mmp_vfe, run_mmp_vfe_policies, run_mmp2, run_mmp_vfe_set_prior
 from jax import tree_util as jtu, lax ,vmap
 from jax.experimental.sparse._base import JAXSparse
 from jax.experimental import sparse
@@ -181,7 +181,7 @@ def calc_KLD(past_beliefs,current_qs):
         return H_past_beliefs-past_beliefs_lncurrent_qs
     #
     kld_for_factor = jtu.tree_map(compute_KLD_for_factor, past_beliefs, current_qs, list(range(len(past_beliefs)))) #- past_beliefs_lncurrent_qs
-    return jtu.tree_reduce(lambda x,y: x+y, kld_for_factor)
+    return kld_for_factor#jtu.tree_reduce(lambda x,y: x+y, kld_for_factor)
 
 def update_posterior_states_vfe_policies(
         A, 
@@ -776,4 +776,67 @@ def update_posterior_states2(
     
     #return qs_hist
     return qs_hist, err
+
+def update_posterior_states_vfe_set_prior(
+        A, 
+        B, 
+        obs, 
+        past_actions, 
+        prior=None, 
+        qs_hist=None, 
+        expected_states=None,#past_beliefs
+        A_dependencies=None, 
+        B_dependencies=None, 
+        num_iter=16, 
+        method='fpi'
+    ):
+
+    if method == 'fpi' or method == "ovf":
+        # format obs to select only last observation
+        curr_obs = jtu.tree_map(lambda x: x[-1], obs)
+        qs = run_factorized_fpi(A, curr_obs, prior, A_dependencies, num_iter=num_iter)
+    else:
+        # format B matrices using action sequences here
+        # TODO: past_actions can be None
+        if past_actions is not None:
+            nf = len(B)
+            actions_tree = [past_actions[:, i] for i in range(nf)] #過去とった行動のリストを作成;Make a list of actions you have taken in the past.
+            
+            # move time steps to the leading axis (leftmost)
+            # this assumes that a policy is always specified as the rightmost axis of Bs
+            B = jtu.tree_map(lambda b, a_idx: jnp.moveaxis(b[..., a_idx], -1, 0), B, actions_tree) #過去とった行動に対応するB行列のリストを作成．;Create a list of B matrices corresponding to past actions.
+        else:
+            B = None
+
+        # outputs of both VMP and MMP should be a list of hidden state factors, where each qs[f].shape = (T, batch_dim, num_states_f)
+        if method == 'vmp':
+            qs = run_vmp(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter) 
+        if method == 'mmp':
+            #MMPにもとづき認識分布（qs）やvfeの計算;Calculation of recognition distribution (qs) and vfe based on MMP
+            if expected_states is not None and qs_hist is not None:
+                expected_states = jtu.tree_map(lambda x: x[None, ...], expected_states) # 2次元配列を3次元配列に変換
+                #print(expected_states[0].shape)#1,100
+                #print(qs_hist[0].shape)#1,100
+                    #print("combine")
+                past_beliefs = jtu.tree_map(lambda x, y: jnp.concatenate((x, y), axis=0), qs_hist, expected_states)
+                #print(past_beliefs[0].shape)#
+                #past_beliefs = jtu.tree_map(lambda x: x.squeeze(0), past_beliefs)  # 3次元配列を2次元配列に変換
+            else:
+                past_beliefs = prior
+                past_beliefs = jtu.tree_map(lambda x: jnp.expand_dims(x, 0),past_beliefs)
+            qs, err, vfe, kld2, bs, un, qs_1step, err_1step, vfe_1step, kld2_1step, bs_1step, un_1step= run_mmp_vfe_set_prior(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter,past_beliefs=past_beliefs)#qs, err, vfe, kld, bs, un
+    
+    if qs_hist is not None:
+        if method == 'fpi' or method == "ovf":
+            qs_hist = jtu.tree_map(lambda x, y: jnp.concatenate([x, jnp.expand_dims(y, 0)], 0), qs_hist, qs)
+        else:
+            #TODO: return entire history of beliefs
+            qs_hist = qs
+    else:
+        if method == 'fpi' or method == "ovf":
+            qs_hist = jtu.tree_map(lambda x: jnp.expand_dims(x, 0), qs)
+        else:
+            qs_hist = qs
+    
+    return qs_hist, err, vfe, kld2, bs, un, qs_1step, err_1step, vfe_1step, kld2_1step, bs_1step, un_1step#qs_hist, err, vfe, kld, bs, un
     
