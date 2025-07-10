@@ -1586,3 +1586,25 @@ class Agent(Module):
         un_1step=jtu.tree_map(lambda x: x.sum(2),un_1step)
 
         return output, err, vfe, kld2, bs, un, qs_1step, err_1step, vfe_1step, kld2_1step, bs_1step, un_1step#output, err, vfe, kld(S_Hqs)(po), bs, un
+    
+    def calc_bayesian_model_averaging3(self, qs_pi, q_pi):
+        #print(f"len(qs_pi): {len(qs_pi[0])}")
+        #print(f"self.policies.shape[0]: {self.policies.shape[0]}")
+        #if len(qs_pi[0])==q_pi.shape[0]:##状態因子数＝ポリシー数だとエラー？
+        #if len(qs_pi)>1:##状態因子が複数のとき用にfix必要
+            
+        q_pi=jnp.array(q_pi)
+        beliefs = qs_pi
+        #Bayesian_model_avaraging_full=jnp.zeros(beliefs[0].shape)
+        Bayesian_model_avaraging_full=None
+        
+        #Bayesian_model_avaraging_full=jnp.tensordot(q_pi, beliefs, axes=(0, 1))
+        for i in range(len(beliefs)):
+            beliefs[i]=jnp.array(beliefs[i])
+       
+        Bayesian_model_avaraging_full=jtu.tree_map(lambda beliefs_f:jnp.tensordot(q_pi, beliefs_f, axes=(0, 0)),beliefs)
+        
+        Bayesian_model_avaraging=Bayesian_model_avaraging_full
+        #else:
+            #Bayesian_model_avaraging=qs_pi
+        return Bayesian_model_avaraging
