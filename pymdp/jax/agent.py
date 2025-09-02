@@ -635,7 +635,7 @@ class Agent(Module):
             use_inductive=self.use_inductive
         )
 
-        q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB = vmap(infer_policies)(
+        q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB,I_B_o,I_B_o_se = vmap(infer_policies)(
             latest_belief, 
             self.A,
             self.B,
@@ -648,7 +648,7 @@ class Agent(Module):
             inductive_epsilon=self.inductive_epsilon
         )
         #print(PBS)
-        return q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB
+        return q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB,I_B_o,I_B_o_se
     
     def infer_states_vfe_policies(self, observations, empirical_prior, *, past_actions=None, qs_hist=None, mask=None):
         """
@@ -1510,7 +1510,7 @@ class Agent(Module):
 
         return q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB
     
-    def infer_states_vfe_set_prior(self, observations, empirical_prior, *, past_actions=None, qs_hist=None, mask=None, expected_states=None):#empirical_priorにもqs_histを入れる
+    def infer_states_vfe_set_prior(self, observations, empirical_prior, *, past_actions=None, qs_hist=None, mask=None, expected_states=None,tau=1.):#empirical_priorにもqs_histを入れる
         """
         Update approximate posterior over hidden states by solving variational inference problem, given an observation.
 
@@ -1559,7 +1559,8 @@ class Agent(Module):
             A_dependencies=self.A_dependencies,
             B_dependencies=self.B_dependencies,
             num_iter=self.num_iter,
-            method=self.inference_algo
+            method=self.inference_algo,
+            tau=tau
             
         )#並列処理のための関数の宣言;Declaring functions for parallel processing
         

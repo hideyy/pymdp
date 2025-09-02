@@ -788,7 +788,8 @@ def update_posterior_states_vfe_set_prior(
         A_dependencies=None, 
         B_dependencies=None, 
         num_iter=16, 
-        method='fpi'
+        method='fpi',
+        tau=1.
     ):
 
     if method == 'fpi' or method == "ovf":
@@ -824,7 +825,7 @@ def update_posterior_states_vfe_set_prior(
             else:
                 past_beliefs = prior
                 past_beliefs = jtu.tree_map(lambda x: jnp.expand_dims(x, 0),past_beliefs)
-            qs, err, vfe, kld2, bs, un, qs_1step, err_1step, vfe_1step, kld2_1step, bs_1step, un_1step= run_mmp_vfe_set_prior(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter,past_beliefs=past_beliefs)#qs, err, vfe, kld, bs, un
+            qs, err, vfe, kld2, bs, un, qs_1step, err_1step, vfe_1step, kld2_1step, bs_1step, un_1step= run_mmp_vfe_set_prior(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=num_iter,tau=tau, past_beliefs=past_beliefs)#qs, err, vfe, kld, bs, un
     
     if qs_hist is not None:
         if method == 'fpi' or method == "ovf":

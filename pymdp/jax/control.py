@@ -494,6 +494,8 @@ def update_posterior_policies_inductive_efe(policy_matrix, qs_init, A, B, C, E, 
     oRisk_a_p = results[4]  # 
     PBS_pA_a_p = results[5]  # パラメータAに関する情報利得;information gain for pA(parameter of A)
     PBS_pB_a_p = results[6]  # パラメータBに関する情報利得;information gain for pB(parameter of B)
+    I_B_o_a_p = results[7]  # パラメータBに関する情報利得;information gain for pB(parameter of B)
+    I_B_o_se_a_p = results[8]  # パラメータBに関する情報利得;information gain for pB(parameter of B)
     #print(PBS_a_p)
     # only in the case of policy-dependent qs_inits
     # in_axes_list = (1,) * n_factors
@@ -502,7 +504,7 @@ def update_posterior_policies_inductive_efe(policy_matrix, qs_init, A, B, C, E, 
     # policies needs to be an NDarray of shape (n_policies, n_timepoints, n_control_factors)
     #neg_efe_all_policies = vmap(compute_G_fixed_states)(policy_matrix)
     #⇓ポリシーの分布の計算q(π)=softmax(-γG+E)
-    return nn.softmax(gamma * neg_efe_all_policies + log_stable(E)), neg_efe_all_policies, PBS_a_p, PKLD_a_p, PFE_a_p, oRisk_a_p, PBS_pA_a_p, PBS_pB_a_p
+    return nn.softmax(gamma * neg_efe_all_policies + log_stable(E)), neg_efe_all_policies, PBS_a_p, PKLD_a_p, PFE_a_p, oRisk_a_p, PBS_pA_a_p, PBS_pB_a_p,I_B_o_a_p,I_B_o_se_a_p
 
 def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_dependencies, I, policy_i, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=False):
     """ 
@@ -513,7 +515,7 @@ def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_d
     def scan_body(carry, t):
 
         #qs, neg_G = carry
-        qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,utility, inductive_value = carry
+        qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,utility, inductive_value, I_B_o,I_B_o_se = carry
 
         qs_next = compute_expected_state(qs, B, policy_i[t], B_dependencies) #q(s|π)=p(sτ+1|sτ,π)stの計算.stは認識分布;Calculation of q(s|π)=p(sτ+1|sτ,π)st. st is the recognition distribution.
 
@@ -529,7 +531,9 @@ def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_d
         utility += compute_expected_utility(t, qo, C) if use_utility else 0.#Calculate utility(Pragmatic value)
 
         inductive_value += calc_inductive_value_t(qs_init, qs_next, I, epsilon=inductive_epsilon) if use_inductive else 0.
-
+        val1, val2 = calc_pB_o_mutual_info_gain(pB, qs_next, qs_init, B_dependencies, policy_i[t], qo, A, A_dependencies) if use_param_info_gain else (0., 0.)
+        I_B_o += val1
+        I_B_o_se += val2
         if pA is not None:
             param_info_gainA -= calc_pA_info_gain(pA, qo, qs_next, A_dependencies) if use_param_info_gain else 0.
         else:
@@ -543,7 +547,7 @@ def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_d
 
         neg_G = info_gain + predicted_KLD - predicted_F - oRisk + param_info_gainA + param_info_gainB + inductive_value
         #neg_G += inductive_value 
-        return (qs_next, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value), None
+        return (qs_next, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value, I_B_o,I_B_o_se), None
 
     qs = qs_init
     #print(qs)
@@ -557,9 +561,11 @@ def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_d
     param_info_gainB = 0.
     utility=0.
     inductive_value=0.
+    I_B_o=0.
+    I_B_o_se=0.
     #ポリシーの深さ分scan_bodyを反復; Iterate scan_body by policy depth
-    final_state, _ = lax.scan(scan_body, (qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value), jnp.arange(policy_i.shape[0]))
-    _, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value = final_state
+    final_state, _ = lax.scan(scan_body, (qs, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value, I_B_o,I_B_o_se), jnp.arange(policy_i.shape[0]))
+    _, neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value, I_B_o,I_B_o_se = final_state
     #print(info_gain)
     #print(predicted_KLD)
     """print(predicted_F)
@@ -568,8 +574,10 @@ def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_d
     print(param_info_gainB)
 
     print(inductive_value) """
+    #print(f"I_B_o:",I_B_o)
+    #print(f"I_B_o_se:",I_B_o_se)
     #print(neg_G)
-    return neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB
+    return neg_G, info_gain, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, I_B_o, I_B_o_se
 
 def compute_predicted_KLD(qs, qo, A, A_dependencies):
     
@@ -1002,3 +1010,245 @@ def compute_expected_utility_alpha(t, qo, C, alpha):
             util += alpha_m * (o_m * C_m).sum()
     
     return util
+
+def calc_pB_o_mutual_info_gain(pB, qs_t, qs_t_minus_1, B_dependencies, u_t_minus_1, qo, A, A_dependencies,rng_key=None):
+    """
+    Compute expected Dirichlet information gain about parameters ``pB`` under a given policy
+
+    Parameters
+    ----------
+    pB: ``Array`` of dtype object
+        Dirichlet parameters over transition model (same shape as ``B``)
+    qs_t: ``list`` of ``Array`` of dtype object
+        Predictive posterior beliefs over hidden states expected under the policy at time ``t``
+    qs_t_minus_1: ``list`` of ``Array`` of dtype object
+        Posterior over hidden states at time ``t-1`` (before receiving observations)
+    u_t_minus_1: "Array"
+        Actions in time step t-1 for each factor
+
+    Returns
+    -------
+    infogain_pB: float
+        Surprise (about Dirichlet parameters) expected under the policy in question
+    """
+    from typing import List, Sequence, Tuple, Union
+    from jax import random, tree_util as jtu
+    Array = jnp.ndarray
+
+    def _sample_B_factor_all_actions(
+        key,
+        alpha_f: Array,
+        eps: float = 1e-12
+    ) :
+        """
+        1因子分のディリクレ濃度 alpha_f から、全 (s, a) 列について B をサンプル
+        alpha_f: (S_next, S_curr, A)  あるいは (S_next, S_curr) にも対応
+        返り値: (B_f, key_out)  B_f は alpha_f と同じ shape
+        """
+        alpha_f = jnp.asarray(alpha_f, dtype=jnp.float32)
+
+        # 行動非依存 (S_next, S_curr) の場合も扱えるよう分岐
+        if alpha_f.ndim == 2:
+            S_next, S_curr = alpha_f.shape
+            # 列（現状態 s）ごとに dirichlet
+            keys = random.split(key, S_curr + 1)
+            subkeys, key_out = keys[:-1], keys[-1]  # (S_curr, 2)
+            # (S_curr, S_next) を vmapped でサンプル → 転置して (S_next, S_curr)
+            cols = jnp.transpose(jnp.clip(alpha_f, eps, jnp.inf), (1, 0))  # (S_curr, S_next)
+            samples = vmap(lambda k, a: random.dirichlet(k, a))(subkeys, cols)  # (S_curr, S_next)
+            B_f = jnp.transpose(samples, (1, 0))
+            return B_f, key_out
+
+        elif alpha_f.ndim == 3:
+            S_next, S_curr, A = alpha_f.shape
+            alpha = jnp.clip(alpha_f, eps, jnp.inf)  # (S_next, S_curr, A)
+
+            # 全 (s, a) 列の本数 = S_curr * A ぶんの key を用意
+            keys = random.split(key, S_curr * A + 1)
+            subkeys, key_out = keys[:-1], keys[-1]  # (S_curr*A, 2)
+
+            # 列方向に並べ替え： (S_curr, A, S_next) → (S_curr*A, S_next)
+            cols = jnp.transpose(alpha, (1, 2, 0)).reshape(S_curr * A, S_next)
+
+            # 列ごとに Dirichlet サンプル → (S_curr*A, S_next)
+            samples = vmap(lambda k, a: random.dirichlet(k, a))(subkeys, cols)
+
+            # 形を戻す： (S_curr*A, S_next) → (S_curr, A, S_next) → 転置で (S_next, S_curr, A)
+            samples_Snext_Scurr_A = jnp.transpose(samples.reshape(S_curr, A, S_next), (2, 0, 1))
+            return samples_Snext_Scurr_A, key_out
+
+        else:
+            raise ValueError("alpha_f の次元は 2 か 3 を想定しています。")
+
+    def sample_B_from_pB_tree(
+        key,
+        pB: Sequence[Array],
+        eps: float = 1e-12
+    ) :
+        """
+        pB: 因子ごとのディリクレ濃度配列のリスト
+            各配列の shape は (S_next, S_curr, A)（行動依存）または (S_next, S_curr)（行動非依存）
+        返り値: (B_list, key_out)  … B_list は pB と同じ構造（各因子ごとに B を返す）
+        """
+        # pB の因子数ぶん key を用意
+        F = len(pB)
+        keys = random.split(key, F + 1)
+        key_factors, key_out = keys[:-1], keys[-1]
+
+        # keys を pB と同じ PyTree 構造に（ここでは単純なリスト）
+        # 因子ごとにサンプルを実行
+        def _per_factor(alpha_f, kf):
+            B_f, _ = _sample_B_factor_all_actions(kf, alpha_f, eps=eps)
+            return B_f
+
+        B_list = jtu.tree_map(_per_factor, list(pB), list(key_factors))
+        # tree_map は同構造を返す（ここでは List[Array]）
+        return B_list, key_out
+
+    def compute_entropy_for_modality(qo_m):
+        H_qo = stable_entropy(qo_m)#Calculate predictied entropyの計算
+        #H_A_m = - stable_xlogx(A_m).sum(0)#観測モデル（A,）p(o|s)のエントロピーを計算し，o方向に和を取る．;Calculate the entropy of the observation model (A, p(o|s)) and sum in the direction of o.
+        #deps = A_dependencies[m]
+        #relevant_factors = [qs[idx] for idx in deps]
+        #qs_H_A_m = factor_dot(H_A_m, relevant_factors)#Ambiguityの計算．q(s|π)とH_A_mの内積．;Calculation of ambiguity. Inner product of q(s|π) and H_A_m.
+        return H_qo 
+
+    def compute_expected_state_for_mc(qs_prior, B, u_t, B_dependencies):
+        """
+        qs_prior : list[Array]                   # 各因子の q_t(s_f)
+        B        : list[Array]                   # 各因子の B_f (S_next, S_curr, A_f) or (S_next, S_curr)
+        u_t      : Array or list[int]            # 各因子の行動インデックス（JAX配列でも可）
+        B_dependencies : list[list[int] or tuple[int]]
+            各因子 f について、B_f が依存する hidden state 因子インデックス（静的：Python リスト/タプル）
+            例：self-transition だけなら [[f] for f in range(num_factors)]
+        """
+        assert len(B) == len(u_t) == len(B_dependencies)
+        qs_next = []
+
+        for B_f, u_f, deps in zip(B, u_t, B_dependencies):
+            # 1) 行動依存なら動的インデクシングで a=u_f の断面を取得
+            if B_f.ndim == 3:
+                # (S_next, S_curr, A_f) → (S_next, S_curr)
+                B_sel = jnp.take(B_f, u_f, axis=-1)
+            else:
+                # (S_next, S_curr)（行動非依存）
+                B_sel = B_f
+
+            # 2) 依存因子の事前を収集（deps は Python の静的なインデックス列であること）
+            relevant_factors = [qs_prior[idx] for idx in deps]
+
+            # 3) P(s'_f | B, π) = factor_dot( B_sel, ⨂_{d∈deps} q(s_d) )
+            #    factor_dot は (S_next, S_curr_{deps}) × ⨂ q → (S_next,) を返す想定
+            qs_next_f = factor_dot(B_sel, relevant_factors, keep_dims=(0,))
+
+            qs_next.append(qs_next_f)
+
+        return qs_next  # list[Array]（各因子の q_{t+1}(s'_f)）
+    def compute_expected_obs_for_mc(qs, A, A_dependencies):
+        """
+        New version of expected observation (computation of Q(o|pi)) that takes into account sparse dependencies between observation
+        modalities and hidden state factors
+        """
+            
+        def compute_expected_obs_modality(A_m, m):
+            deps = A_dependencies[m]
+            relevant_factors = [qs[idx] for idx in deps]
+            return factor_dot(A_m, relevant_factors, keep_dims=(0,))
+
+        return jtu.tree_map(compute_expected_obs_modality, A, list(range(len(A))))
+
+    from typing import Tuple
+
+    def _single_H_qo_given_B_pi(
+        key,
+        pB,
+        qs_t_minus_1,
+        u_t_minus_1,
+        B_dependencies,
+        A,
+        A_dependencies,
+        compute_expected_state_for_mc,
+        compute_expected_obs_for_mc,
+        compute_entropy_for_modality,
+    ):
+        B_list, _ = sample_B_from_pB_tree(key, pB)
+
+        # ★ ここで静的インデックス（Python int / tuple）を使う
+        qs_next = compute_expected_state_for_mc(qs_t_minus_1, B_list, u_t_minus_1, B_dependencies)
+        qo_temp = compute_expected_obs_for_mc(qs_next, A, A_dependencies)
+
+        H_qo_B_per_mod = jtu.tree_map(compute_entropy_for_modality, qo_temp)
+        H_qo_B = jtu.tree_reduce(lambda x, y: x + y, H_qo_B_per_mod)
+        return H_qo_B
+
+    def mc_E_H_qo_given_B_pi_vmap(
+        rng_key,
+        pB,
+        qs_t_minus_1,
+        u_t_minus_1,              
+        B_dependencies,
+        A,
+        A_dependencies,
+        compute_expected_state_for_mc,
+        compute_expected_obs_for_mc,
+        compute_entropy_for_modality,
+        nsamples: int = 5000,
+    ):
+        keys = random.split(rng_key, nsamples + 1)
+        key_batch, next_key = keys[:-1], keys[-1]
+
+        vmapped = vmap(
+            lambda k: _single_H_qo_given_B_pi(
+                k, pB, qs_t_minus_1, u_t_minus_1, B_dependencies,
+                A, A_dependencies, compute_expected_state_for_mc, compute_expected_obs_for_mc,
+                compute_entropy_for_modality
+            ),
+            in_axes=0, out_axes=0
+        )
+        H_batch = vmapped(key_batch)  # (nsamples,)
+        # ★ ここを Python 変換しない（float にしない）
+        mean_H = jnp.mean(H_batch)
+        n = jnp.asarray(nsamples, dtype=H_batch.dtype)
+        se_H   = jnp.std(H_batch, ddof=1) / jnp.sqrt(n)
+        return mean_H, se_H, next_key
+
+    if rng_key is None:
+        rng_key = random.PRNGKey(0)  # ※ 実運用は外から渡すのが推奨
+    # ★ 追加：依存を “静的な tuple” に固定（hash 可能にする）
+    Bdeps_static = tuple(tuple(int(i) for i in deps) for deps in B_dependencies)
+    Adeps_static = tuple(tuple(int(i) for i in deps) for deps in A_dependencies)
+    # 1) モンテカルロ推定；MCで E_B[H(o|B,π)] を推定
+    # もともと: u_t_minus_1 = [0, 2, ...], B_dependencies = [[0,2], [1], ...] など
+    #u_static  = tuple(int(u) for u in u_t_minus_1)
+    #Bdeps_static = tuple(tuple(int(i) for i in deps) for deps in B_dependencies)
+
+    mc_fn_jit = jit(
+        mc_E_H_qo_given_B_pi_vmap,
+        static_argnames=('B_dependencies', 'A_dependencies',
+                        'compute_expected_state_for_mc', 'compute_expected_obs_for_mc',
+                        'compute_entropy_for_modality', 'nsamples')
+    )
+
+    mean_H_v, se_H_v, rng_key = mc_fn_jit(
+        rng_key,
+        pB,
+        qs_t_minus_1,
+        u_t_minus_1,        
+        Bdeps_static,# ← 静的 tuple
+        A,
+        Adeps_static,# ← 静的 tuple
+        compute_expected_state_for_mc,
+        compute_expected_obs_for_mc,
+        compute_entropy_for_modality,
+        nsamples=8192,
+    )
+    
+    # 2) 解析的に H(o|π) を計算（既存のやり方のまま）
+    Hqo_per_modality = jtu.tree_map(compute_entropy_for_modality, qo)    
+    Hqo = jtu.tree_reduce(lambda x,y: x+y, Hqo_per_modality)
+    #Hqo = jnp.asarray(Hqo)
+    # 3) 相互情報量の推定値とSE
+    I_pi_est = Hqo - mean_H_v        # JAX scalar
+    I_pi_se  = se_H_v                # JAX scalar
+
+    return I_pi_est, I_pi_se
