@@ -476,12 +476,12 @@ def calc_inductive_value_t(qs, qs_next, I, epsilon=1e-3):
 #     neg_G_all_policies = jit(update_posterior_policies)(policy_matrix, qs_init, A, B, C)
 #     print(neg_G_all_policies)
 
-def update_posterior_policies_inductive_efe(policy_matrix, qs_init, A, B, C, E, pA, pB, A_dependencies, B_dependencies, I, gamma=16.0, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=True):
+def update_posterior_policies_inductive_efe(policy_matrix, qs_init, A, B, C, E, pA, pB, A_dependencies, B_dependencies, I, gamma=16.0, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=True,rng_key=None):
     # policy --> n_levels_factor_f x 1
     # factor --> n_levels_factor_f x n_policies
     ## vmap across policies
     compute_G_fixed_states = partial(compute_G_policy_inductive_efe, qs_init, A, B, C, pA, pB, A_dependencies, B_dependencies, I, inductive_epsilon=inductive_epsilon,
-                                     use_utility=use_utility,  use_states_info_gain=use_states_info_gain, use_param_info_gain=use_param_info_gain, use_inductive=use_inductive)
+                                     use_utility=use_utility,  use_states_info_gain=use_states_info_gain, use_param_info_gain=use_param_info_gain, use_inductive=use_inductive,rng_key=rng_key)
 
     # policies needs to be an NDarray of shape (n_policies, n_timepoints, n_control_factors)
     results = vmap(compute_G_fixed_states)(policy_matrix)
@@ -506,7 +506,7 @@ def update_posterior_policies_inductive_efe(policy_matrix, qs_init, A, B, C, E, 
     #⇓ポリシーの分布の計算q(π)=softmax(-γG+E)
     return nn.softmax(gamma * neg_efe_all_policies + log_stable(E)), neg_efe_all_policies, PBS_a_p, PKLD_a_p, PFE_a_p, oRisk_a_p, PBS_pA_a_p, PBS_pB_a_p,I_B_o_a_p,I_B_o_se_a_p
 
-def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_dependencies, I, policy_i, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=False):
+def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_dependencies, I, policy_i, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=False,rng_key=None):
     """ 
     Write a version of compute_G_policy that does the same computations as `compute_G_policy` but using `lax.scan` instead of a for loop.
     This one further adds computations used for inductive planning.
@@ -531,17 +531,20 @@ def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_d
         utility += compute_expected_utility(t, qo, C) if use_utility else 0.#Calculate utility(Pragmatic value)
 
         inductive_value += calc_inductive_value_t(qs_init, qs_next, I, epsilon=inductive_epsilon) if use_inductive else 0.
-        val1, val2 = calc_pB_o_mutual_info_gain(pB, qs_next, qs_init, B_dependencies, policy_i[t], qo, A, A_dependencies) if use_param_info_gain else (0., 0.)
-        I_B_o += val1
-        I_B_o_se += val2
+        
         if pA is not None:
             param_info_gainA -= calc_pA_info_gain(pA, qo, qs_next, A_dependencies) if use_param_info_gain else 0.
         else:
             param_info_gainA = 0.
         if pB is not None:
             param_info_gainB -= calc_pB_info_gain(pB, qs_next, qs, B_dependencies, policy_i[t]) if use_param_info_gain else 0.
+            val1, val2 = calc_pB_o_mutual_info_gain(pB, qs_next, qs_init, B_dependencies, policy_i[t], qo, A, A_dependencies,rng_key=rng_key) if use_param_info_gain else (0., 0.)
+            I_B_o += val1
+            I_B_o_se += val2
         else:
             param_info_gainB = 0.
+            I_B_o=0.
+            I_B_o_se =0.
 
         #neg_G = info_gain + param_info_gainA + param_info_gainB + inductive_value + utility
 

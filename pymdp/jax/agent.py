@@ -608,7 +608,7 @@ class Agent(Module):
         kld = inference.calc_KLD(past_beliefs,current_qs)
         return kld
     
-    def infer_policies_efe(self, qs: List):
+    def infer_policies_efe(self, qs: List,rng_key=None):
         """
         Perform policy inference by optimizing a posterior (categorical) distribution over policies.
         This distribution is computed as the softmax of ``G * gamma + lnE`` where ``G`` is the negative expected
@@ -632,7 +632,8 @@ class Agent(Module):
             use_utility=self.use_utility,
             use_states_info_gain=self.use_states_info_gain,
             use_param_info_gain=self.use_param_info_gain,
-            use_inductive=self.use_inductive
+            use_inductive=self.use_inductive,
+            rng_key=rng_key
         )
 
         q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB,I_B_o,I_B_o_se = vmap(infer_policies)(
