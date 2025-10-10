@@ -127,7 +127,7 @@ def update_posterior_states_vfe(
         qs_hist=None, 
         A_dependencies=None, 
         B_dependencies=None, 
-        num_iter=16, 
+        num_iter=32, #num_iter=16, 
         method='fpi'
     ):
 

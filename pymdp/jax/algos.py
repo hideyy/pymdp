@@ -375,7 +375,7 @@ if __name__ == "__main__":
     # log_prior = jnp.array([0, -80., -80., -80, -80.])
     # print(jit(grad(sum_prod))(log_prior))
 
-def run_mmp_vfe(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=1, tau=1.):
+def run_mmp_vfe(A, B, obs, prior, A_dependencies, B_dependencies, num_iter=1, tau=0.1):#, num_iter=1, tau=1.,
     qs, err, vfe, kld2, bs, un = update_marginals_vfe(#qs, err, vfe, kld, bs, un
         get_mmp_messages_kld, 
         obs, 
@@ -419,7 +419,7 @@ def update_marginals_vfe(get_messages, obs, A, B, prior, A_dependencies, B_depen
     qs = jtu.tree_map(nn.softmax, ln_qs)#lnqsのソフトマックスを取り，反復1回目の認識分布を作成（フラットな確率分布）．Take the softmax of lnqs and create the recognition distribution for the first iteration (flat probability distribution).
 
     def scan_fn(carry, iter):#変分更新を行うための関数．;Function for performing variation updates.
-        qs, err, vfe, S_Hqs, bs, un  = carry #反復によりcarryに含まれるqs（認識）やvfeが更新される．;Repetition updates qs (recognition) and vfe contained in carry. #qs, err, vfe, kld, bs, un#S_Hqs
+        qs, err, vfe, kld, bs, un  = carry #反復によりcarryに含まれるqs（認識）やvfeが更新される．;Repetition updates qs (recognition) and vfe contained in carry. #qs, err, vfe, kld, bs, un#S_Hqs
 
         ln_qs = jtu.tree_map(log_stable, qs) #認識分布の対数を計算;Calculate the logarithm of the recognition distribution
         # messages from future $m_+(s_t)$ and past $m_-(s_t)$ for all time steps and factors. For t = T we have that $m_+(s_T) = 0$
@@ -441,7 +441,7 @@ def update_marginals_vfe(get_messages, obs, A, B, prior, A_dependencies, B_depen
 
         output = jtu.tree_map(mgds_vfe, ln_As, lnB_past, lnB_future, lnB_future_for_kld, ln_qs) #vfe等情報量の計算と認識（qs）の更新．;Calculation of information quantity such as vfe and updating of recognition (qs). #lnB_future_for_kld
         qs, err, vfe, kld, bs, un = zip(*output) #qs, err, vfe, kld, bs, unS_Hqs
-        return (list(qs), list(err), list(vfe), list(S_Hqs), list(bs), list(un)), None #(list(qs), list(err), list(vfe), list(kld), list(bs), list(un))S_Hqs, None
+        return (list(qs), list(err), list(vfe), list(kld), list(bs), list(un)), None #(list(qs), list(err), list(vfe), list(kld), list(bs), list(un))S_Hqs, None
     err = qs#初期入力を作成．形状が間違っていなければ問題なし．;Create initial input. If the shape is correct, there is no problem.
     vfe = qs
     kld2 = qs #kld = qs
@@ -455,21 +455,34 @@ def mirror_gradient_descent_step_vfe_kld(tau, ln_A, lnB_past, lnB_future,lnB_fut
     """
     u_{k+1} = u_{k} - \nabla_p F_k
     p_k = softmax(u_k)"""
-    err = ln_A - ln_qs + lnB_past + lnB_future #「状態予測誤差」の計算; Calculation of “state prediction error”
+    err = ln_A - ln_qs + lnB_past + lnB_future #「状態予測誤差」の計算; Calculation of “state prediction error”25/10/09デバッグ，τ=t；lnB_past=0，qs*lnB_future＝0.18310294
+    # vfe -6.7419767
+    # un_tmp 1.2565311
+    # lnB_future 0.029849546
+    # lnqs 8.0283575
+    # print(f"lnA",ln_A)
+    # print(f"lnqs",ln_qs)
+    # print(f"lnB_past",lnB_past)
+    # print(f"lnB_future",lnB_future)
+
     kld_tmp = ln_qs - lnB_future_for_kld
     S_Hqs_tmp=lnB_past + lnB_future #情報量計算用; For calculating emotional indicators #BS+Hqs##ln_A + lnB_past + lnB_future
     bs_tmp = lnB_past + lnB_future - ln_qs
     un_tmp = ln_A
+    Hqs_tmp=ln_qs
     prior = nn.softmax(lnB_future_for_kld - lnB_future_for_kld.mean(axis=-1, keepdims=True))
     ln_qs = ln_qs + tau * err #認識分布の更新，;Updating recognition distribution  #err=-dF/dqs
     qs = nn.softmax(ln_qs - ln_qs.mean(axis=-1, keepdims=True)) #lnqsのソフトマックスを取りqsを計算．;Take the softmax of lnqs and calculate qs.
 
-    #S_Hqs = -1 * jnp.multiply(qs, S_Hqs_tmp)
-    kld = -1 * jnp.multiply(prior, kld_tmp)
-    bs = -1 * jnp.multiply(qs, bs_tmp)
-    un = -1 * jnp.multiply(qs, un_tmp)
-    vfe = -1 * jnp.multiply(qs, err) #vfeの計算;vfe calculation
+    #S_Hqs = -1 * jnp.multiply(qs, S_Hqs_tmp
+    #err= -1 * jnp.multiply(qs, lnB_past)##
+    kld= -1 * jnp.multiply(qs, un_tmp)
+    #kld = -1 * jnp.multiply(prior, kld_tmp)
+    bs = -1 * jnp.multiply(qs, lnB_future)#bs = -1 * jnp.multiply(qs, bs_tmp)
+    un = -1 * jnp.multiply(qs, Hqs_tmp)#un = -1 * jnp.multiply(qs, un_tmp)
+    vfe = -1 * jnp.multiply(qs, err) #vfeの計算;vfe calculation,
     return qs, err, vfe, kld, bs, un #qs, err, vfe, kld, bs, un
+
 
 def get_mmp_messages_kld(ln_B, B, qs, ln_prior, B_deps):
     

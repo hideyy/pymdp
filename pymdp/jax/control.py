@@ -1222,10 +1222,9 @@ def calc_pB_o_mutual_info_gain(pB, qs_t, qs_t_minus_1, B_dependencies, u_t_minus
     Adeps_static = tuple(tuple(int(i) for i in deps) for deps in A_dependencies)
     # 1) モンテカルロ推定；MCで E_B[H(o|B,π)] を推定
     # もともと: u_t_minus_1 = [0, 2, ...], B_dependencies = [[0,2], [1], ...] など
-    #u_static  = tuple(int(u) for u in u_t_minus_1)
-    #Bdeps_static = tuple(tuple(int(i) for i in deps) for deps in B_dependencies)
-
-    mc_fn_jit = jit(
+    
+    #高速版？
+    """ mc_fn_jit = jit(
         mc_E_H_qo_given_B_pi_vmap,
         static_argnames=('B_dependencies', 'A_dependencies',
                         'compute_expected_state_for_mc', 'compute_expected_obs_for_mc',
@@ -1244,6 +1243,139 @@ def calc_pB_o_mutual_info_gain(pB, qs_t, qs_t_minus_1, B_dependencies, u_t_minus
         compute_expected_obs_for_mc,
         compute_entropy_for_modality,
         nsamples=8192,
+    ) """
+    ##メモリ節約版
+    from functools import partial
+    from typing import NamedTuple
+    from jax import jit, vmap, lax, random
+    #import jax.numpy as jnp
+
+    class _AggState(NamedTuple):
+        n: jnp.ndarray     # 累積サンプル数
+        mean: jnp.ndarray  # 累積平均
+        M2: jnp.ndarray    # 分散合算用の M2 (= (n-1)*var の和)
+
+    def mc_E_H_qo_given_B_pi_chunked(
+        rng_key,
+        pB,
+        qs_t_minus_1,
+        u_t_minus_1,
+        B_dependencies,
+        A,
+        A_dependencies,
+        compute_expected_state_for_mc,
+        compute_expected_obs_for_mc,
+        compute_entropy_for_modality,
+        nsamples: int = 8192,
+        chunk_size: int = 512,        # ★ ここで並列度を制御（メモリに合わせて調整）
+        remat_inner: bool = False,    # ★ True で中間を再計算（さらに省メモリ、やや遅い）
+    ):
+        """
+        - nsamples を chunk_size ずつに割って vmap で並列評価
+        - 各チャンクの (mean, M2) を Welford 合算
+        - keys はチャンクごとに fold_in → split で少量生成
+        """
+
+        # inner: 1サンプルぶんの H を計算
+        def one_H_given_B(key):
+            B_list, _ = sample_B_from_pB_tree(key, pB)
+            qs_next = compute_expected_state_for_mc(qs_t_minus_1, B_list, u_t_minus_1, B_dependencies)
+            qo_temp = compute_expected_obs_for_mc(qs_next, A, A_dependencies)
+            H_qo_B_per_mod = jtu.tree_map(compute_entropy_for_modality, qo_temp)
+            return jtu.tree_reduce(lambda x, y: x + y, H_qo_B_per_mod)  # スカラー
+
+        if remat_inner:
+            from jax import checkpoint
+            one_H_given_B = checkpoint(one_H_given_B)  # 中間保存を減らし更に省メモリ
+
+        # vmap で chunk_size 個まとめて評価
+        vmapped_H = vmap(one_H_given_B, in_axes=0, out_axes=0)  # keys -> (chunk_size,)
+
+        # チャンク数（最後の端数チャンクも固定サイズで回してマスク）
+        num_chunks = (nsamples + chunk_size - 1) // chunk_size
+
+        def combine(state: _AggState, batch_mean, batch_M2, batch_n):
+            # Welford の2群合算
+            n1, m1, M2_1 = state.n, state.mean, state.M2
+            n2, m2, M2_2 = batch_n, batch_mean, batch_M2
+
+            n_tot = n1 + n2
+            # n2==0（全マスク）でも数値安定に更新
+            w = jnp.where(n_tot > 0, n2 / jnp.maximum(n_tot, 1.0), 0.0)
+            delta = m2 - m1
+            m_tot = m1 + w * delta
+            M2_tot = M2_1 + M2_2 + jnp.where(
+                (n1 > 0) & (n2 > 0),
+                (delta * delta) * (n1 * n2 / jnp.maximum(n_tot, 1.0)),
+                0.0
+            )
+            return _AggState(n_tot, m_tot, M2_tot)
+
+        def body_fun(i, state: _AggState):
+            # このチャンクのキーを少量だけ生成
+            base = random.fold_in(rng_key, i)
+            keys = random.split(base, chunk_size)
+
+            # チャンク内で一括並列評価（B などの中間はチャンク内だけで生存）
+            H_batch = vmapped_H(keys)  # (chunk_size,)
+
+            # 末尾チャンク用のマスク（余剰を捨てる）
+            start = i * chunk_size
+            remain = nsamples - start
+            m = jnp.clip(remain, 0, chunk_size)
+            mask = (jnp.arange(chunk_size) < m).astype(H_batch.dtype)
+
+            # マスク付きでチャンク統計を計算（2パスでも chunk_size が小さいので軽い）
+            batch_n = jnp.sum(mask)
+            # すべてマスクならスキップ
+            def nonempty():
+                s1 = jnp.sum(H_batch * mask)
+                mean = s1 / jnp.maximum(batch_n, 1.0)
+                M2 = jnp.sum(((H_batch - mean) ** 2) * mask)  # 分散合算用M2
+                return mean, M2, batch_n
+            def empty():
+                z = jnp.array(0.0, dtype=H_batch.dtype)
+                return z, z, jnp.array(0.0, dtype=H_batch.dtype)
+
+            batch_mean, batch_M2, batch_n = lax.cond(batch_n > 0, nonempty, empty)
+            return combine(state, batch_mean, batch_M2, batch_n)
+
+        init = _AggState(
+            n=jnp.array(0.0, dtype=jnp.float32),
+            mean=jnp.array(0.0, dtype=jnp.float32),
+            M2=jnp.array(0.0, dtype=jnp.float32),
+        )
+
+        final = lax.fori_loop(0, num_chunks, body_fun, init)
+
+        mean_H = final.mean
+        se_H = jnp.where(final.n > 1.0,
+                        jnp.sqrt((final.M2 / (final.n - 1.0)) / final.n),
+                        jnp.array(jnp.nan, dtype=final.mean.dtype))
+        return mean_H, se_H, rng_key
+
+    mc_fn_jit = jit(
+        mc_E_H_qo_given_B_pi_chunked,
+        static_argnames=('B_dependencies','A_dependencies',
+                        'compute_expected_state_for_mc','compute_expected_obs_for_mc',
+                        'compute_entropy_for_modality','nsamples','chunk_size','remat_inner'),
+        donate_argnums=(0,)  # rng_key を寄付 → バッファ再利用を促進
+    )
+
+    mean_H_v, se_H_v, rng_key = mc_fn_jit(
+        rng_key,
+        pB,
+        qs_t_minus_1,
+        u_t_minus_1,
+        Bdeps_static,
+        A,
+        Adeps_static,
+        compute_expected_state_for_mc,
+        compute_expected_obs_for_mc,
+        compute_entropy_for_modality,
+        nsamples=8192,       # ← 総サンプル数（従来同等）
+        chunk_size=512,      # ← メモリに合わせて 256〜2048 で調整
+        remat_inner=False,   # ← まだメモリ厳しければ True（やや遅くなる）
     )
     
     # 2) 解析的に H(o|π) を計算（既存のやり方のまま）
