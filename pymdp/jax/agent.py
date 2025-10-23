@@ -1610,3 +1610,46 @@ class Agent(Module):
         #else:
             #Bayesian_model_avaraging=qs_pi
         return Bayesian_model_avaraging
+    
+    def infer_policies_efe_curiosity(self, qs: List,rng_key=None):
+        """
+        Perform policy inference by optimizing a posterior (categorical) distribution over policies.
+        This distribution is computed as the softmax of ``G * gamma + lnE`` where ``G`` is the negative expected
+        free energy of policies, ``gamma`` is a policy precision and ``lnE`` is the (log) prior probability of policies.
+        This function returns the posterior over policies as well as the negative expected free energy of each policy.
+
+        Returns
+        ----------
+        q_pi: 1D ``numpy.ndarray``
+            Posterior beliefs over policies, i.e. a vector containing one posterior probability per policy.
+        G: 1D ``numpy.ndarray``
+            Negative expected free energies of each policy, i.e. a vector containing one negative expected free energy per policy.
+        """
+
+        latest_belief = jtu.tree_map(lambda x: x[:, -1], qs) # only get the posterior belief held at the current timepoint
+        infer_policies = partial(
+            control.update_posterior_policies_inductive_efe_curiosity,
+            self.policies,
+            A_dependencies=self.A_dependencies,
+            B_dependencies=self.B_dependencies,
+            use_utility=self.use_utility,
+            use_states_info_gain=self.use_states_info_gain,
+            use_param_info_gain=self.use_param_info_gain,
+            use_inductive=self.use_inductive,
+            rng_key=rng_key
+        )
+
+        q_pi, G, PBS,PBS_st, PKLD, PFE, oRisk, PBS_pA, PBS_pB,I_B_o,I_B_o_se = vmap(infer_policies)(
+            latest_belief, 
+            self.A,
+            self.B,
+            self.C,
+            self.E,
+            self.pA,
+            self.pB,
+            I = self.I,
+            gamma=self.gamma,
+            inductive_epsilon=self.inductive_epsilon
+        )
+        #print(PBS)
+        return q_pi, G, PBS, PBS_st,PKLD, PFE, oRisk, PBS_pA, PBS_pB,I_B_o,I_B_o_se

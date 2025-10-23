@@ -521,7 +521,9 @@ def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_d
 
         qo = compute_expected_obs(qs_next, A, A_dependencies) #Calculate q(o|π)=p(o|s)p(sτ+1|sτ,π)st
 
-        info_gain += compute_info_gain(qs_next, qo, A, A_dependencies) if use_states_info_gain else 0.#Calculate pBS(epistemic value) #compute_predicted_KLD(qs_next, qo, A, A_dependencies)
+        info_gain +=compute_info_gain_st(qs_next, qo, A, qs, B, policy_i[t], A_dependencies, B_dependencies)
+
+        #info_gain += compute_info_gain(qs_next, qo, A, A_dependencies) if use_states_info_gain else 0.#Calculate pBS(epistemic value) #compute_predicted_KLD(qs_next, qo, A, A_dependencies)
 
         predicted_KLD += compute_predicted_KLD(qs_next, qo, A, A_dependencies) #Calculate pKLD
         #print("PFE")
@@ -1387,3 +1389,193 @@ def calc_pB_o_mutual_info_gain(pB, qs_t, qs_t_minus_1, B_dependencies, u_t_minus
     I_pi_se  = se_H_v                # JAX scalar
 
     return I_pi_est, I_pi_se
+
+def compute_info_gain_st(qs, qo, A, qs_prior, B, u_t, A_dependencies, B_dependencies=None):
+
+    #assert len(u_t) == len(B)  
+    # qs_next = []
+    # for B_f, u_f, deps in zip(B, u_t, B_dependencies):
+    #     relevant_factors = [qs_prior[idx] for idx in deps]
+        
+    #     qs_next_f = factor_dot(B_f[...,u_f], relevant_factors, keep_dims=(0,))
+    #     qs_next.append(qs_next_f)
+    assert len(u_t) == len(B)  
+    B_dot_1 = []
+    for B_f, u_f, deps_B in zip(B, u_t, B_dependencies):
+        #relevant_factors = [qs_prior[idx] for idx in deps]
+        ##relevant_factors = [jnp.ones_like(qs_prior[idx]) for idx in deps_B]#B_dependenciesにもとづき，認識分布と同じ形状の全要素1のリストを作成
+        B_dot_1_f=B_f[...,u_f]
+        ##B_dot_1_f = factor_dot(B_f[...,u_f], relevant_factors, keep_dims=tuple(range(B_f[...,u_f].ndim)))#全要素1のベクトルをかけて，該当する行動utのB行列をそのまま取り出す
+        B_dot_1.append(B_dot_1_f)
+        
+    # P(s'|s, u) = \sum_{s, u} P(s'|s) P(s|u) P(u|pi)P(pi) because u </-> pi
+    
+    def build_dims_and_keep(A_m, relevant_factors, contract_axes):
+        assert len(relevant_factors) == len(contract_axes)
+        # 新規ラベルは A_m の既存ラベル(A_m.ndim) 以降を使う
+        next_label = A_m.ndim
+
+        dims = []
+        keep = [0]  # A_m の軸0（観測軸）を残す
+
+        for ax, x in zip(contract_axes, relevant_factors):
+            # x の軸0は A_m の軸 ax と縮約
+            labels = [ax]
+            # x の軸1以降は出力に残すので新しいラベルを割り当て、keep にも追加
+            for _ in range(1, x.ndim):
+                labels.append(next_label)
+                keep.append(next_label)
+                next_label += 1
+            dims.append(tuple(labels))
+        dims = tuple(dims)
+        keep_dims = tuple(keep)
+        return dims, keep_dims
+
+    def compute_info_gain_for_modality(qo_m, A_m, m):
+        H_qo = stable_entropy(qo_m)#Calculate predictied entropyの計算
+        
+        deps_A = A_dependencies[m]
+        relevant_factors = [B_dot_1[idx] for idx in deps_A]
+        #contract_axes = [d + 1 for d in deps_A]  # A は通常 (o, s1, s2, ...) なので状態は +1 シフト
+        contract_axes = [1 + i for i in range(len(relevant_factors))]
+        dims, keep_dims = build_dims_and_keep(A_m, relevant_factors, contract_axes)
+        #relevant_factors = [B[idx] for idx in deps_A]
+        #A_B = factor_dot(A_m,relevant_factors)
+        for ax, x in zip(contract_axes, relevant_factors):
+            ax_size = A_m.shape[ax]
+            x0_size = x.shape[0]
+            assert ax_size == x0_size, (
+                f"Contract size mismatch: A_m axis {ax} has {ax_size}, "
+                f"but factor.shape[0] is {x0_size}. "
+                f"A_m.shape={A_m.shape}, factor.shape={x.shape}"
+            )
+        
+        A_B = factor_dot_flex(
+            A_m,
+            xs=relevant_factors,
+            dims=dims,
+            keep_dims=keep_dims
+        )
+        deps = A_dependencies[m]
+        relevant_factors_st = [qs_prior[idx] for idx in deps_A] #st
+        H_AB = - stable_xlogx(A_B).sum(0) #H[A*B]
+        st_H_AB = factor_dot(H_AB, relevant_factors_st)
+        # H_A_m = - stable_xlogx(A_m).sum(0)#観測モデル（A,）p(o|s)のエントロピーを計算し，o方向に和を取る．;Calculate the entropy of the observation model (A, p(o|s)) and sum in the direction of o.
+        # deps = A_dependencies[m]
+        # relevant_factors = [qs[idx] for idx in deps]
+        # qs_H_A_m = factor_dot(H_A_m, relevant_factors)#Ambiguityの計算．q(s|π)とH_A_mの内積．;Calculation of ambiguity. Inner product of q(s|π) and H_A_m.
+        return H_qo - st_H_AB
+    
+    info_gains_per_modality = jtu.tree_map(compute_info_gain_for_modality, qo, A, list(range(len(A))))#,B_dot_1
+        
+    return jtu.tree_reduce(lambda x,y: x+y, info_gains_per_modality)
+
+def update_posterior_policies_inductive_efe_curiosity(policy_matrix, qs_init, A, B, C, E, pA, pB, A_dependencies, B_dependencies, I, gamma=16.0, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=True,rng_key=None):
+    # policy --> n_levels_factor_f x 1
+    # factor --> n_levels_factor_f x n_policies
+    ## vmap across policies
+    compute_G_fixed_states = partial(compute_G_policy_inductive_efe_curiosity, qs_init, A, B, C, pA, pB, A_dependencies, B_dependencies, I, inductive_epsilon=inductive_epsilon,
+                                     use_utility=use_utility,  use_states_info_gain=use_states_info_gain, use_param_info_gain=use_param_info_gain, use_inductive=use_inductive,rng_key=rng_key)
+
+    # policies needs to be an NDarray of shape (n_policies, n_timepoints, n_control_factors)
+    results = vmap(compute_G_fixed_states)(policy_matrix)
+    
+    
+    neg_efe_all_policies = results[0]  # 各ポリシーの負の期待自由エネルギー;Negative expected free energy of each policy
+    PBS_a_p = results[1]  # 状態情報利得;information gain for states
+    PBS_st_a_p = results[2]
+    PKLD_a_p = results[3]  # 状態情報利得
+    PFE_a_p = results[4]  # 
+    oRisk_a_p = results[5]  # 
+    PBS_pA_a_p = results[6]  # パラメータAに関する情報利得;information gain for pA(parameter of A)
+    PBS_pB_a_p = results[7]  # パラメータBに関する情報利得;information gain for pB(parameter of B)
+    I_B_o_a_p = results[8]  # パラメータBに関する情報利得;information gain for pB(parameter of B)
+    I_B_o_se_a_p = results[9]  # パラメータBに関する情報利得;information gain for pB(parameter of B)
+    #print(PBS_a_p)
+    # only in the case of policy-dependent qs_inits
+    # in_axes_list = (1,) * n_factors
+    # all_efe_of_policies = vmap(compute_G_policy, in_axes=(in_axes_list, 0))(qs_init_pi, policy_matrix)
+
+    # policies needs to be an NDarray of shape (n_policies, n_timepoints, n_control_factors)
+    #neg_efe_all_policies = vmap(compute_G_fixed_states)(policy_matrix)
+    #⇓ポリシーの分布の計算q(π)=softmax(-γG+E)
+    return nn.softmax(gamma * neg_efe_all_policies + log_stable(E)), neg_efe_all_policies, PBS_a_p, PBS_st_a_p, PKLD_a_p, PFE_a_p, oRisk_a_p, PBS_pA_a_p, PBS_pB_a_p,I_B_o_a_p,I_B_o_se_a_p
+
+def compute_G_policy_inductive_efe_curiosity(qs_init, A, B, C, pA, pB, A_dependencies, B_dependencies, I, policy_i, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=False,rng_key=None):
+    """ 
+    Write a version of compute_G_policy that does the same computations as `compute_G_policy` but using `lax.scan` instead of a for loop.
+    This one further adds computations used for inductive planning.
+    """
+
+    def scan_body(carry, t):
+
+        #qs, neg_G = carry
+        qs, neg_G, info_gain,info_gain_st, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,utility, inductive_value, I_B_o,I_B_o_se = carry
+
+        qs_next = compute_expected_state(qs, B, policy_i[t], B_dependencies) #q(s|π)=p(sτ+1|sτ,π)stの計算.stは認識分布;Calculation of q(s|π)=p(sτ+1|sτ,π)st. st is the recognition distribution.
+
+        qo = compute_expected_obs(qs_next, A, A_dependencies) #Calculate q(o|π)=p(o|s)p(sτ+1|sτ,π)st
+
+        info_gain_st +=compute_info_gain_st(qs_next, qo, A, qs, B, policy_i[t], A_dependencies, B_dependencies)
+
+        info_gain += compute_info_gain(qs_next, qo, A, A_dependencies) if use_states_info_gain else 0.#Calculate pBS(epistemic value) #compute_predicted_KLD(qs_next, qo, A, A_dependencies)
+
+        predicted_KLD += compute_predicted_KLD(qs_next, qo, A, A_dependencies) #Calculate pKLD
+        #print("PFE")
+        predicted_F += compute_predicted_free_energy(qs_next, qo, A, A_dependencies) #Calculate predicted free energy
+        #print("Risk")
+        oRisk += compute_oRisk(t, qo, C)#Calculate Risk
+        utility += compute_expected_utility(t, qo, C) if use_utility else 0.#Calculate utility(Pragmatic value)
+
+        inductive_value += calc_inductive_value_t(qs_init, qs_next, I, epsilon=inductive_epsilon) if use_inductive else 0.
+        
+        if pA is not None:
+            param_info_gainA -= calc_pA_info_gain(pA, qo, qs_next, A_dependencies) if use_param_info_gain else 0.
+        else:
+            param_info_gainA = 0.
+        if pB is not None:
+            param_info_gainB -= calc_pB_info_gain(pB, qs_next, qs, B_dependencies, policy_i[t]) if use_param_info_gain else 0.
+            val1, val2 = calc_pB_o_mutual_info_gain(pB, qs_next, qs_init, B_dependencies, policy_i[t], qo, A, A_dependencies,rng_key=rng_key) if use_param_info_gain else (0., 0.)
+            I_B_o += val1
+            I_B_o_se += val2
+        else:
+            param_info_gainB = 0.
+            I_B_o=0.
+            I_B_o_se =0.
+
+        #neg_G = info_gain + param_info_gainA + param_info_gainB + inductive_value + utility
+
+        neg_G = info_gain + info_gain_st+predicted_KLD - predicted_F - oRisk + param_info_gainA + param_info_gainB + inductive_value
+        #neg_G += inductive_value 
+        return (qs_next, neg_G, info_gain,info_gain_st, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value, I_B_o,I_B_o_se), None
+
+    qs = qs_init
+    #print(qs)
+    #print(policy_i)
+    neg_G = 0.
+    info_gain = 0.
+    info_gain_st= 0.
+    predicted_KLD = 0.
+    predicted_F = 0.
+    oRisk = 0.
+    param_info_gainA = 0.
+    param_info_gainB = 0.
+    utility=0.
+    inductive_value=0.
+    I_B_o=0.
+    I_B_o_se=0.
+    #ポリシーの深さ分scan_bodyを反復; Iterate scan_body by policy depth
+    final_state, _ = lax.scan(scan_body, (qs, neg_G, info_gain,info_gain_st, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value, I_B_o,I_B_o_se), jnp.arange(policy_i.shape[0]))
+    _, neg_G, info_gain, info_gain_st,predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value, I_B_o,I_B_o_se = final_state
+    #print(info_gain)
+    #print(predicted_KLD)
+    """print(predicted_F)
+    print(oRisk)
+    print(param_info_gainA)
+    print(param_info_gainB)
+
+    print(inductive_value) """
+    #print(f"I_B_o:",I_B_o)
+    #print(f"I_B_o_se:",I_B_o_se)
+    #print(neg_G)
+    return neg_G, info_gain, info_gain_st,predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, I_B_o, I_B_o_se
