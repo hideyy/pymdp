@@ -521,9 +521,9 @@ def compute_G_policy_inductive_efe(qs_init, A, B, C, pA, pB, A_dependencies, B_d
 
         qo = compute_expected_obs(qs_next, A, A_dependencies) #Calculate q(o|π)=p(o|s)p(sτ+1|sτ,π)st
 
-        info_gain +=compute_info_gain_st(qs_next, qo, A, qs, B, policy_i[t], A_dependencies, B_dependencies)
+        #info_gain +=compute_info_gain_st(qs_next, qo, A, qs, B, policy_i[t], A_dependencies, B_dependencies)
 
-        #info_gain += compute_info_gain(qs_next, qo, A, A_dependencies) if use_states_info_gain else 0.#Calculate pBS(epistemic value) #compute_predicted_KLD(qs_next, qo, A, A_dependencies)
+        info_gain += compute_info_gain(qs_next, qo, A, A_dependencies) if use_states_info_gain else 0.#Calculate pBS(epistemic value) #compute_predicted_KLD(qs_next, qo, A, A_dependencies)
 
         predicted_KLD += compute_predicted_KLD(qs_next, qo, A, A_dependencies) #Calculate pKLD
         #print("PFE")
