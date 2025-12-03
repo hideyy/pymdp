@@ -1040,16 +1040,16 @@ def calc_pB_o_mutual_info_gain(pB, qs_t, qs_t_minus_1, B_dependencies, u_t_minus
     from jax import random, tree_util as jtu
     Array = jnp.ndarray
 
-    def _sample_B_factor_all_actions(
+    """ def _sample_B_factor_all_actions(
         key,
         alpha_f: Array,
         eps: float = 1e-12
     ) :
-        """
-        1因子分のディリクレ濃度 alpha_f から、全 (s, a) 列について B をサンプル
-        alpha_f: (S_next, S_curr, A)  あるいは (S_next, S_curr) にも対応
-        返り値: (B_f, key_out)  B_f は alpha_f と同じ shape
-        """
+        
+        #1因子分のディリクレ濃度 alpha_f から、全 (s, a) 列について B をサンプル
+        #alpha_f: (S_next, S_curr, A)  あるいは (S_next, S_curr) にも対応
+        #返り値: (B_f, key_out)  B_f は alpha_f と同じ shape
+        
         alpha_f = jnp.asarray(alpha_f, dtype=jnp.float32)
 
         # 行動非依存 (S_next, S_curr) の場合も扱えるよう分岐
@@ -1083,7 +1083,67 @@ def calc_pB_o_mutual_info_gain(pB, qs_t, qs_t_minus_1, B_dependencies, u_t_minus
             return samples_Snext_Scurr_A, key_out
 
         else:
-            raise ValueError("alpha_f の次元は 2 か 3 を想定しています。")
+            raise ValueError("alpha_f の次元は 2 か 3 を想定しています。") """
+    
+
+    def _sample_B_factor_all_actions(
+        key,
+        alpha_f,
+        eps: float = 1e-12,
+    ):
+        """
+        1因子分のディリクレ濃度 alpha_f から、全「列」について B をサンプルする汎用版
+
+        想定:
+        - alpha_f の 0 番目の軸が Dirichlet の次元（"次状態" 次元）S_next
+        - それ以外の軸は全部「独立なディリクレ分布の集合」とみなす
+
+        例:
+        alpha_f.shape = (S_next, S_curr)           → 現在の 2D ケース
+        alpha_f.shape = (S_next, S_curr, A)        → 現在の 3D ケース
+        alpha_f.shape = (S_next, F1, F2, ..., Fk)  → 一般化されたケース
+
+        戻り値:
+        B_f : alpha_f と同じ shape、各 "列" ごとに Dirichlet サンプル済み
+        key_out : 消費後の乱数キー
+        """
+        alpha_f = jnp.asarray(alpha_f, dtype=jnp.float32)
+
+        if alpha_f.ndim == 1:
+            # 単一の Dirichlet ベクトル (K,) の場合
+            alpha = jnp.clip(alpha_f, eps, jnp.inf)
+            B_vec = random.dirichlet(key, alpha)
+            return B_vec, key
+
+        if alpha_f.ndim < 2:
+            raise ValueError("alpha_f は少なくとも 2 次元（Dirichlet次元 + 何か）が必要です。")
+
+        # 0 番目軸が Dirichlet の次元
+        S_next = alpha_f.shape[0]
+        rest_shape = alpha_f.shape[1:]           # それ以外の軸
+        n_cols = 1
+        for d in rest_shape:
+            n_cols *= d                          # Python int（shape 情報なので jit 的にOK）
+
+        # (S_next, rest...) → (S_next, n_cols) にまとめる
+        alpha = jnp.clip(alpha_f, eps, jnp.inf)
+        alpha_2d = alpha.reshape(S_next, n_cols)         # (S_next, n_cols)
+
+        # 列方向に並べ替え → (n_cols, S_next)
+        cols = jnp.transpose(alpha_2d, (1, 0))          # (n_cols, S_next)
+
+        # 列ごとに Dirichlet サンプル
+        keys = random.split(key, n_cols + 1)
+        subkeys, key_out = keys[:-1], keys[-1]          # (n_cols, 2)
+        samples = vmap(lambda k, a: random.dirichlet(k, a))(subkeys, cols)  # (n_cols, S_next)
+
+        # 元の shape に戻す:
+        # (n_cols, S_next) → (S_next, n_cols) → (S_next, *rest_shape)
+        samples_2d = jnp.transpose(samples, (1, 0))     # (S_next, n_cols)
+        B_f = samples_2d.reshape((S_next, *rest_shape)) # alpha_f と同じ shape
+
+        return B_f, key_out
+
 
     def sample_B_from_pB_tree(
         key,

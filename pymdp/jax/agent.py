@@ -1120,7 +1120,7 @@ class Agent(Module):
                                                                  #jnp.array(self.infer_policies_efe_qs_pi_sub(qs_pi)))
 
         if len(qs_pi[0])==1:##len(qs_pi)==1だと一因子以外のとき，1時刻目をはじけない，
-            q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB=self.infer_policies_efe(qs_pi)
+            q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB,_,_=self.infer_policies_efe(qs_pi)
         elif mode==1:
             q_pi, G, PBS, PKLD, PFE, oRisk, PBS_pA, PBS_pB=self.infer_policies_efe_qs_pi_sub(qs_pi)##未来延長の場合？
         elif mode==2:
