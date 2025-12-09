@@ -1190,14 +1190,36 @@ def calc_pB_o_mutual_info_gain(pB, qs_t, qs_t_minus_1, B_dependencies, u_t_minus
         assert len(B) == len(u_t) == len(B_dependencies)
         qs_next = []
 
-        for B_f, u_f, deps in zip(B, u_t, B_dependencies):
+        """ for B_f, u_f, deps in zip(B, u_t, B_dependencies):
             # 1) 行動依存なら動的インデクシングで a=u_f の断面を取得
             if B_f.ndim == 3:
                 # (S_next, S_curr, A_f) → (S_next, S_curr)
                 B_sel = jnp.take(B_f, u_f, axis=-1)
             else:
                 # (S_next, S_curr)（行動非依存）
+                B_sel = B_f """
+        for B_f, u_f, deps in zip(B, u_t, B_dependencies):
+        # -----------------------------
+        # 1) B_f の形状から「行動軸の有無」を判定
+        #    状態まわりの軸数 = 1 (s'_f) + len(deps)
+        # -----------------------------
+            n_state_axes = 1 + len(deps)  # s'_f と依存する各因子の s_t
+
+            if B_f.ndim == n_state_axes:
+                # (S_next, S_dep1, ..., S_depK) → 行動非依存
                 B_sel = B_f
+            elif B_f.ndim == n_state_axes + 1:
+                # (S_next, S_dep1, ..., S_depK, A_f) → 行動依存
+                # 最後の軸が A_f とみなして u_f でスライス
+                B_sel = jnp.take(B_f, u_f, axis=-1)
+            else:
+                # 想定外の形状なら明示的にエラーにする
+                raise ValueError(
+                    f"B[{deps}] has invalid shape {B_f.shape}: "
+                    f"expected {n_state_axes} dims (no action) or "
+                    f"{n_state_axes + 1} dims (with action) "
+                    f"given deps={deps}"
+                )
 
             # 2) 依存因子の事前を収集（deps は Python の静的なインデックス列であること）
             relevant_factors = [qs_prior[idx] for idx in deps]
