@@ -9,7 +9,7 @@ import jax.tree_util as jtu
 from typing import List, Tuple, Optional
 from functools import partial
 from jax.scipy.special import xlogy
-from jax import lax, jit, vmap, nn
+from jax import lax, jit, vmap, nn, debug
 from jax import random as jr
 from itertools import chain
 from jaxtyping import Array
@@ -1226,8 +1226,12 @@ def calc_pB_o_mutual_info_gain(pB, qs_t, qs_t_minus_1, B_dependencies, u_t_minus
 
             # 3) P(s'_f | B, π) = factor_dot( B_sel, ⨂_{d∈deps} q(s_d) )
             #    factor_dot は (S_next, S_curr_{deps}) × ⨂ q → (S_next,) を返す想定
-            print(f"B_sel",B_sel.shape)
-            print(f"relevant_factors",len(relevant_factors))
+            # 🔥 jit-safe debug print
+            debug.print("---- DEBUG ----")
+            debug.print("deps = {}", deps)
+            debug.print("B_f shape = {}", B_f.shape)
+            debug.print("B_sel shape = {}", B_sel.shape)
+            debug.print("len(relevant_factors) = {}", len(relevant_factors))
             qs_next_f = factor_dot(B_sel, relevant_factors, keep_dims=(0,))
 
             qs_next.append(qs_next_f)
