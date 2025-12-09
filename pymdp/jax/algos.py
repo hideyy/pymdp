@@ -559,15 +559,26 @@ def get_mmp_messages_kld(ln_B, B, qs, ln_prior, B_deps):
         return B_marg
 
     if B is not None:
-        print(f"B_deps",B_deps)
+        #print(f"B_deps",B_deps)
         inv_B_deps = [[i for i, d in enumerate(B_deps) if f in d] for f in factors]
         B_marg = jtu.tree_map(lambda f: marg(inv_B_deps[f], f), factors)
         lnB_future = jtu.tree_map(forward, B, ln_prior, factors)
         lnB_future_for_kld = jtu.tree_map(forward_for_kld, B, ln_prior, factors) 
-        print(f"B_marg[0].shape",B_marg[0])
-        print(f"inv_B_deps[0]",inv_B_deps[0])
-        print(f"get_deps_back(qs, inv_B_deps[0])",get_deps_back(qs, inv_B_deps[0]))
-        lnB_past = jtu.tree_map(lambda f: backward(B_marg[f], get_deps_back(qs, inv_B_deps[f])), factors)
+        #print(f"B_marg[0].shape",B_marg[0])
+        #print(f"inv_B_deps[0]",inv_B_deps[0])
+        #print(f"get_deps_back(qs, inv_B_deps[0])",get_deps_back(qs, inv_B_deps[0]))
+        # ★ 特定の因子に状態遷移するものがない場合でも動くように修正25/12/9
+        def lnB_past_for_factor(f_idx):
+            deps = inv_B_deps[f_idx]
+            if len(deps) == 0:
+                # この因子に依存する遷移がない → backward メッセージはゼロ（log 1）とみなす
+                # qs[f_idx] は (T, num_states_f) のはずなので、それと同じ形で 0 を返す
+                return jnp.zeros_like(qs[f_idx])
+            else:
+                return backward(B_marg[f_idx], get_deps_back(qs, deps))
+
+        lnB_past = jtu.tree_map(lnB_past_for_factor, factors)
+        ##lnB_past = jtu.tree_map(lambda f: backward(B_marg[f], get_deps_back(qs, inv_B_deps[f])), factors)
         #B_future = jtu.tree_map(forward_Bqs, B, ln_prior, factors)
     else: 
         lnB_future = jtu.tree_map(lambda x: jnp.expand_dims(x, 0), ln_prior)
@@ -1060,10 +1071,21 @@ def get_mmp_messages_kld_set_prior(ln_B, B, qs, ln_prior, B_deps):
         B_marg = jtu.tree_map(lambda f: marg(inv_B_deps[f], f), factors)
         lnB_future = jtu.tree_map(forward, B, ln_prior, factors)
         lnB_future_for_kld = jtu.tree_map(forward_for_kld, B, ln_prior, factors) 
-        print(f"B_marg[f].shape",B_marg[0])
-        print(f"inv_B_deps[0]",inv_B_deps[0])
-        print(f"get_deps_back(qs, inv_B_deps[f])",get_deps_back(qs, inv_B_deps[0]))
-        lnB_past = jtu.tree_map(lambda f: backward(B_marg[f], get_deps_back(qs, inv_B_deps[f])), factors)
+        #print(f"B_marg[f].shape",B_marg[0])
+        #print(f"inv_B_deps[0]",inv_B_deps[0])
+        #print(f"get_deps_back(qs, inv_B_deps[f])",get_deps_back(qs, inv_B_deps[0]))
+        # ★ 特定の因子に状態遷移するものがない場合でも動くように修正25/12/9
+        def lnB_past_for_factor(f_idx):
+            deps = inv_B_deps[f_idx]
+            if len(deps) == 0:
+                # この因子に依存する遷移がない → backward メッセージはゼロ（log 1）とみなす
+                # qs[f_idx] は (T, num_states_f) のはずなので、それと同じ形で 0 を返す
+                return jnp.zeros_like(qs[f_idx])
+            else:
+                return backward(B_marg[f_idx], get_deps_back(qs, deps))
+
+        lnB_past = jtu.tree_map(lnB_past_for_factor, factors)
+        #lnB_past = jtu.tree_map(lambda f: backward(B_marg[f], get_deps_back(qs, inv_B_deps[f])), factors)
         #B_future = jtu.tree_map(forward_Bqs, B, ln_prior, factors)
     else: 
         lnB_future = jtu.tree_map(lambda x: jnp.expand_dims(x, 0), ln_prior)
