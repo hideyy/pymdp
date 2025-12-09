@@ -1227,11 +1227,11 @@ def calc_pB_o_mutual_info_gain(pB, qs_t, qs_t_minus_1, B_dependencies, u_t_minus
             # 3) P(s'_f | B, π) = factor_dot( B_sel, ⨂_{d∈deps} q(s_d) )
             #    factor_dot は (S_next, S_curr_{deps}) × ⨂ q → (S_next,) を返す想定
             # 🔥 jit-safe debug print
-            print("---- DEBUG ----")
+            """ print("---- DEBUG ----")
             print(f"deps = ", deps)
             print(f"B_f shape = ", B_f.shape)
             print(f"B_sel shape = ", B_sel.shape)
-            print(f"len(relevant_factors) =", len(relevant_factors))
+            print(f"len(relevant_factors) =", len(relevant_factors)) """
             qs_next_f = factor_dot(B_sel, relevant_factors, keep_dims=(0,))
 
             qs_next.append(qs_next_f)
@@ -1445,7 +1445,7 @@ def calc_pB_o_mutual_info_gain(pB, qs_t, qs_t_minus_1, B_dependencies, u_t_minus
         return mean_H, se_H, rng_key
     #デバッグ
     # デバッグ中は jit を飛ばして直接呼ぶ
-    mean_H_v, se_H_v, rng_key = mc_E_H_qo_given_B_pi_chunked(
+    """ mean_H_v, se_H_v, rng_key = mc_E_H_qo_given_B_pi_chunked(
         rng_key,
         pB,
         qs_t_minus_1,
@@ -1459,9 +1459,9 @@ def calc_pB_o_mutual_info_gain(pB, qs_t, qs_t_minus_1, B_dependencies, u_t_minus
         nsamples=8192,
         chunk_size=512,
         remat_inner=False,
-    )
+    ) """
         #本命↓
-    """ mc_fn_jit = jit(
+    mc_fn_jit = jit(
         mc_E_H_qo_given_B_pi_chunked,
         static_argnames=('B_dependencies','A_dependencies',
                         'compute_expected_state_for_mc','compute_expected_obs_for_mc',
@@ -1483,7 +1483,7 @@ def calc_pB_o_mutual_info_gain(pB, qs_t, qs_t_minus_1, B_dependencies, u_t_minus
         nsamples=8192,       # ← 総サンプル数（従来同等）
         chunk_size=512,      # ← メモリに合わせて 256〜2048 で調整
         remat_inner=False,   # ← まだメモリ厳しければ True（やや遅くなる）
-    ) """
+    )
     
     # 2) 解析的に H(o|π) を計算（既存のやり方のまま）
     Hqo_per_modality = jtu.tree_map(compute_entropy_for_modality, qo)    

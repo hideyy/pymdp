@@ -563,6 +563,8 @@ def get_mmp_messages_kld(ln_B, B, qs, ln_prior, B_deps):
         B_marg = jtu.tree_map(lambda f: marg(inv_B_deps[f], f), factors)
         lnB_future = jtu.tree_map(forward, B, ln_prior, factors)
         lnB_future_for_kld = jtu.tree_map(forward_for_kld, B, ln_prior, factors) 
+        print(f"B_marg[f].shape",B_marg[0].shape)
+        print(f"get_deps_back(qs, inv_B_deps[f])",get_deps_back(qs, inv_B_deps[0]))
         lnB_past = jtu.tree_map(lambda f: backward(B_marg[f], get_deps_back(qs, inv_B_deps[f])), factors)
         #B_future = jtu.tree_map(forward_Bqs, B, ln_prior, factors)
     else: 
