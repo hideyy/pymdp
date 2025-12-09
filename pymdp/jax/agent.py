@@ -169,6 +169,8 @@ class Agent(Module):
 
         for f in range(self.num_factors):
             factor_dims = tuple([self.num_states[f] for f in self.B_dependencies[f]])
+            print(f"factor_dims",factor_dims)
+            print(f"self.B[f].shape[2:-1] ",self.B[f].shape[2:-1] )
             assert self.B[f].shape[2:-1] == factor_dims, f"Please input a `B_dependencies` whose {f}-th indices pick out the hidden state factors that line up with the all-but-final lagging dimensions of B[{f}]..." 
             if self.pB != None:
                 assert self.pB[f].shape[2:-1] == factor_dims, f"Please input a `B_dependencies` whose {f}-th indices pick out the hidden state factors that line up with the all-but-final lagging dimensions of pB[{f}]..." 
