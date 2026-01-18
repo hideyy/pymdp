@@ -1634,7 +1634,8 @@ def compute_G_policy_inductive_efe_curiosity(qs_init, A, B, C, pA, pB, A_depende
         utility += compute_expected_utility(t, qo, C) if use_utility else 0.#Calculate utility(Pragmatic value)
 
         #inductive_value += calc_inductive_value_t(qs_init, qs_next, I, epsilon=inductive_epsilon) if use_inductive else 0.
-        H_qs += compute_s_entropy(qs_next, B)
+        #H_qs += compute_s_entropy(qs_next, B)
+        H_qs += jnp.array(compute_s_entropy_list(qs_next, B))
         
         if pA is not None:
             param_info_gainA -= calc_pA_info_gain(pA, qo, qs_next, A_dependencies) if use_param_info_gain else 0.
@@ -1671,7 +1672,8 @@ def compute_G_policy_inductive_efe_curiosity(qs_init, A, B, C, pA, pB, A_depende
     inductive_value=0.
     I_B_o=0.
     I_B_o_se=0.
-    H_qs=0.
+    #H_qs=0.
+    H_qs=jnp.zeros(len(B))
     #ポリシーの深さ分scan_bodyを反復; Iterate scan_body by policy depth
     final_state, _ = lax.scan(scan_body, (qs, neg_G, info_gain,info_gain_st, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, H_qs, I_B_o,I_B_o_se), jnp.arange(policy_i.shape[0]))
     _, neg_G, info_gain, info_gain_st,predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, H_qs, I_B_o,I_B_o_se = final_state
@@ -1702,3 +1704,17 @@ def compute_s_entropy(qs, B):
     s_entropy_per_factor = jtu.tree_map(compute_s_entropy_for_factor, qs, list(range(len(B))))
         
     return jtu.tree_reduce(lambda x,y: x+y, s_entropy_per_factor)
+
+def compute_s_entropy_list(qs, B):
+
+    def compute_s_entropy_for_factor(qs_f, f):
+        H_qs = stable_entropy(qs_f)#Calculate predictied entropyの計算
+        #H_A_m = - stable_xlogx(A_m).sum(0)#観測モデル（A,）p(o|s)のエントロピーを計算し，o方向に和を取る．;Calculate the entropy of the observation model (A, p(o|s)) and sum in the direction of o.
+        #deps = A_dependencies[m]
+        #relevant_factors = [qs[idx] for idx in deps]
+        #qs_H_A_m = factor_dot(H_A_m, relevant_factors)#Ambiguityの計算．q(s|π)とH_A_mの内積．;Calculation of ambiguity. Inner product of q(s|π) and H_A_m.
+        return H_qs
+    
+    s_entropy_per_factor = jtu.tree_map(compute_s_entropy_for_factor, qs, list(range(len(B))))
+        
+    return s_entropy_per_factor
