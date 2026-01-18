@@ -1595,7 +1595,8 @@ def update_posterior_policies_inductive_efe_curiosity(policy_matrix, qs_init, A,
     PBS_pA_a_p = results[6]  # パラメータAに関する情報利得;information gain for pA(parameter of A)
     PBS_pB_a_p = results[7]  # パラメータBに関する情報利得;information gain for pB(parameter of B)
     I_B_o_a_p = results[8]  # パラメータBに関する情報利得;information gain for pB(parameter of B)
-    I_B_o_se_a_p = results[9]  # パラメータBに関する情報利得;information gain for pB(parameter of B)
+    H_qs_a_p=results[9] 
+    #I_B_o_se_a_p = results[9]  # パラメータBに関する情報利得;information gain for pB(parameter of B)
     #print(PBS_a_p)
     # only in the case of policy-dependent qs_inits
     # in_axes_list = (1,) * n_factors
@@ -1604,7 +1605,7 @@ def update_posterior_policies_inductive_efe_curiosity(policy_matrix, qs_init, A,
     # policies needs to be an NDarray of shape (n_policies, n_timepoints, n_control_factors)
     #neg_efe_all_policies = vmap(compute_G_fixed_states)(policy_matrix)
     #⇓ポリシーの分布の計算q(π)=softmax(-γG+E)
-    return nn.softmax(gamma * neg_efe_all_policies + log_stable(E)), neg_efe_all_policies, PBS_a_p, PBS_st_a_p, PKLD_a_p, PFE_a_p, oRisk_a_p, PBS_pA_a_p, PBS_pB_a_p,I_B_o_a_p,I_B_o_se_a_p
+    return nn.softmax(gamma * neg_efe_all_policies + log_stable(E)), neg_efe_all_policies, PBS_a_p, PBS_st_a_p, PKLD_a_p, PFE_a_p, oRisk_a_p, PBS_pA_a_p, PBS_pB_a_p,I_B_o_a_p,H_qs_a_p
 
 def compute_G_policy_inductive_efe_curiosity(qs_init, A, B, C, pA, pB, A_dependencies, B_dependencies, I, policy_i, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=False,rng_key=None):
     """ 
@@ -1615,7 +1616,7 @@ def compute_G_policy_inductive_efe_curiosity(qs_init, A, B, C, pA, pB, A_depende
     def scan_body(carry, t):
 
         #qs, neg_G = carry
-        qs, neg_G, info_gain,info_gain_st, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,utility, inductive_value, I_B_o,I_B_o_se = carry
+        qs, neg_G, info_gain,info_gain_st, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,utility, H_qs, I_B_o,I_B_o_se = carry
 
         qs_next = compute_expected_state(qs, B, policy_i[t], B_dependencies) #q(s|π)=p(sτ+1|sτ,π)stの計算.stは認識分布;Calculation of q(s|π)=p(sτ+1|sτ,π)st. st is the recognition distribution.
 
@@ -1632,7 +1633,8 @@ def compute_G_policy_inductive_efe_curiosity(qs_init, A, B, C, pA, pB, A_depende
         oRisk += compute_oRisk(t, qo, C)#Calculate Risk
         utility += compute_expected_utility(t, qo, C) if use_utility else 0.#Calculate utility(Pragmatic value)
 
-        inductive_value += calc_inductive_value_t(qs_init, qs_next, I, epsilon=inductive_epsilon) if use_inductive else 0.
+        #inductive_value += calc_inductive_value_t(qs_init, qs_next, I, epsilon=inductive_epsilon) if use_inductive else 0.
+        H_qs += compute_s_entropy(qs_next, B)
         
         if pA is not None:
             param_info_gainA -= calc_pA_info_gain(pA, qo, qs_next, A_dependencies) if use_param_info_gain else 0.
@@ -1650,9 +1652,9 @@ def compute_G_policy_inductive_efe_curiosity(qs_init, A, B, C, pA, pB, A_depende
 
         #neg_G = info_gain + param_info_gainA + param_info_gainB + inductive_value + utility
 
-        neg_G = info_gain + info_gain_st+predicted_KLD - predicted_F - oRisk + param_info_gainA + param_info_gainB + inductive_value
+        neg_G = info_gain + info_gain_st+predicted_KLD - predicted_F - oRisk + param_info_gainA + param_info_gainB #+ inductive_value
         #neg_G += inductive_value 
-        return (qs_next, neg_G, info_gain,info_gain_st, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value, I_B_o,I_B_o_se), None
+        return (qs_next, neg_G, info_gain,info_gain_st, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, H_qs, I_B_o,I_B_o_se), None
 
     qs = qs_init
     #print(qs)
@@ -1669,9 +1671,10 @@ def compute_G_policy_inductive_efe_curiosity(qs_init, A, B, C, pA, pB, A_depende
     inductive_value=0.
     I_B_o=0.
     I_B_o_se=0.
+    H_qs=0.
     #ポリシーの深さ分scan_bodyを反復; Iterate scan_body by policy depth
-    final_state, _ = lax.scan(scan_body, (qs, neg_G, info_gain,info_gain_st, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value, I_B_o,I_B_o_se), jnp.arange(policy_i.shape[0]))
-    _, neg_G, info_gain, info_gain_st,predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, inductive_value, I_B_o,I_B_o_se = final_state
+    final_state, _ = lax.scan(scan_body, (qs, neg_G, info_gain,info_gain_st, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, H_qs, I_B_o,I_B_o_se), jnp.arange(policy_i.shape[0]))
+    _, neg_G, info_gain, info_gain_st,predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, H_qs, I_B_o,I_B_o_se = final_state
     #print(info_gain)
     #print(predicted_KLD)
     """print(predicted_F)
@@ -1683,4 +1686,19 @@ def compute_G_policy_inductive_efe_curiosity(qs_init, A, B, C, pA, pB, A_depende
     #print(f"I_B_o:",I_B_o)
     #print(f"I_B_o_se:",I_B_o_se)
     #print(neg_G)
-    return neg_G, info_gain, info_gain_st,predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, I_B_o, I_B_o_se
+    return neg_G, info_gain, info_gain_st,predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, I_B_o, H_qs
+
+
+def compute_s_entropy(qs, B):
+
+    def compute_s_entropy_for_factor(qs_f, f):
+        H_qs = stable_entropy(qs_f)#Calculate predictied entropyの計算
+        #H_A_m = - stable_xlogx(A_m).sum(0)#観測モデル（A,）p(o|s)のエントロピーを計算し，o方向に和を取る．;Calculate the entropy of the observation model (A, p(o|s)) and sum in the direction of o.
+        #deps = A_dependencies[m]
+        #relevant_factors = [qs[idx] for idx in deps]
+        #qs_H_A_m = factor_dot(H_A_m, relevant_factors)#Ambiguityの計算．q(s|π)とH_A_mの内積．;Calculation of ambiguity. Inner product of q(s|π) and H_A_m.
+        return H_qs
+    
+    s_entropy_per_factor = jtu.tree_map(compute_s_entropy_for_factor, qs, list(range(len(B))))
+        
+    return jtu.tree_reduce(lambda x,y: x+y, s_entropy_per_factor)

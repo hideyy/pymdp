@@ -1641,7 +1641,7 @@ class Agent(Module):
             rng_key=rng_key
         )
 
-        q_pi, G, PBS,PBS_st, PKLD, PFE, oRisk, PBS_pA, PBS_pB,I_B_o,I_B_o_se = vmap(infer_policies)(
+        q_pi, G, PBS,PBS_st, PKLD, PFE, oRisk, PBS_pA, PBS_pB,I_B_o,H_qs = vmap(infer_policies)(
             latest_belief, 
             self.A,
             self.B,
@@ -1654,4 +1654,4 @@ class Agent(Module):
             inductive_epsilon=self.inductive_epsilon
         )
         #print(PBS)
-        return q_pi, G, PBS, PBS_st,PKLD, PFE, oRisk, PBS_pA, PBS_pB,I_B_o,I_B_o_se
+        return q_pi, G, PBS, PBS_st,PKLD, PFE, oRisk, PBS_pA, PBS_pB,I_B_o,H_qs
