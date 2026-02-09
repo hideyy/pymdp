@@ -1594,8 +1594,9 @@ def update_posterior_policies_inductive_efe_curiosity(policy_matrix, qs_init, A,
     oRisk_a_p = results[5]  # 
     PBS_pA_a_p = results[6]  # パラメータAに関する情報利得;information gain for pA(parameter of A)
     PBS_pB_a_p = results[7]  # パラメータBに関する情報利得;information gain for pB(parameter of B)
-    I_B_o_a_p = results[8]  # パラメータBに関する情報利得;information gain for pB(parameter of B)
-    H_qs_a_p=results[9] 
+    I_A_o_a_p = results[8]  # パラメータAに関する情報利得;information gain for pA(parameter of A)
+    I_B_o_a_p = results[9]  # パラメータBに関する情報利得;information gain for pB(parameter of B)
+    H_qs_a_p=results[10] 
     #I_B_o_se_a_p = results[9]  # パラメータBに関する情報利得;information gain for pB(parameter of B)
     #print(PBS_a_p)
     # only in the case of policy-dependent qs_inits
@@ -1605,7 +1606,7 @@ def update_posterior_policies_inductive_efe_curiosity(policy_matrix, qs_init, A,
     # policies needs to be an NDarray of shape (n_policies, n_timepoints, n_control_factors)
     #neg_efe_all_policies = vmap(compute_G_fixed_states)(policy_matrix)
     #⇓ポリシーの分布の計算q(π)=softmax(-γG+E)
-    return nn.softmax(gamma * neg_efe_all_policies + log_stable(E)), neg_efe_all_policies, PBS_a_p, PBS_st_a_p, PKLD_a_p, PFE_a_p, oRisk_a_p, PBS_pA_a_p, PBS_pB_a_p,I_B_o_a_p,H_qs_a_p
+    return nn.softmax(gamma * neg_efe_all_policies + log_stable(E)), neg_efe_all_policies, PBS_a_p, PBS_st_a_p, PKLD_a_p, PFE_a_p, oRisk_a_p, PBS_pA_a_p, PBS_pB_a_p,I_A_o_a_p,I_B_o_a_p,H_qs_a_p
 
 def compute_G_policy_inductive_efe_curiosity(qs_init, A, B, C, pA, pB, A_dependencies, B_dependencies, I, policy_i, inductive_epsilon=1e-3, use_utility=True, use_states_info_gain=True, use_param_info_gain=False, use_inductive=False,rng_key=None):
     """ 
@@ -1616,7 +1617,7 @@ def compute_G_policy_inductive_efe_curiosity(qs_init, A, B, C, pA, pB, A_depende
     def scan_body(carry, t):
 
         #qs, neg_G = carry
-        qs, neg_G, info_gain,info_gain_st, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,utility, H_qs, I_B_o,I_B_o_se = carry
+        qs, neg_G, info_gain,info_gain_st, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,utility, H_qs, I_A_o,I_A_o_se,I_B_o,I_B_o_se = carry
 
         qs_next = compute_expected_state(qs, B, policy_i[t], B_dependencies) #q(s|π)=p(sτ+1|sτ,π)stの計算.stは認識分布;Calculation of q(s|π)=p(sτ+1|sτ,π)st. st is the recognition distribution.
 
@@ -1639,8 +1640,13 @@ def compute_G_policy_inductive_efe_curiosity(qs_init, A, B, C, pA, pB, A_depende
         
         if pA is not None:
             param_info_gainA -= calc_pA_info_gain(pA, qo, qs_next, A_dependencies) if use_param_info_gain else 0.
+            val1_a,val2_a = calc_pA_o_mutual_info_gain(pA, qs_next, qo, A_dependencies,rng_key=rng_key) if use_param_info_gain else (0., 0.)
+            I_A_o += val1_a
+            I_A_o_se += val2_a
         else:
             param_info_gainA = 0.
+            I_A_o = 0.
+            I_A_o_se = 0.
         if pB is not None:
             param_info_gainB -= calc_pB_info_gain(pB, qs_next, qs, B_dependencies, policy_i[t]) if use_param_info_gain else 0.
             val1, val2 = calc_pB_o_mutual_info_gain(pB, qs_next, qs_init, B_dependencies, policy_i[t], qo, A, A_dependencies,rng_key=rng_key) if use_param_info_gain else (0., 0.)
@@ -1655,7 +1661,7 @@ def compute_G_policy_inductive_efe_curiosity(qs_init, A, B, C, pA, pB, A_depende
 
         neg_G = info_gain + info_gain_st+predicted_KLD - predicted_F - oRisk + param_info_gainA + param_info_gainB #+ inductive_value
         #neg_G += inductive_value 
-        return (qs_next, neg_G, info_gain,info_gain_st, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, H_qs, I_B_o,I_B_o_se), None
+        return (qs_next, neg_G, info_gain,info_gain_st, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, H_qs,I_A_o,I_A_o_se, I_B_o,I_B_o_se), None
 
     qs = qs_init
     #print(qs)
@@ -1672,11 +1678,13 @@ def compute_G_policy_inductive_efe_curiosity(qs_init, A, B, C, pA, pB, A_depende
     inductive_value=0.
     I_B_o=0.
     I_B_o_se=0.
+    I_A_o=0.
+    I_A_o_se=0.
     #H_qs=0.
     H_qs=jnp.zeros(len(B))
     #ポリシーの深さ分scan_bodyを反復; Iterate scan_body by policy depth
-    final_state, _ = lax.scan(scan_body, (qs, neg_G, info_gain,info_gain_st, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, H_qs, I_B_o,I_B_o_se), jnp.arange(policy_i.shape[0]))
-    _, neg_G, info_gain, info_gain_st,predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, H_qs, I_B_o,I_B_o_se = final_state
+    final_state, _ = lax.scan(scan_body, (qs, neg_G, info_gain,info_gain_st, predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, H_qs, I_A_o,I_A_o_se, I_B_o,I_B_o_se), jnp.arange(policy_i.shape[0]))
+    _, neg_G, info_gain, info_gain_st,predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, utility, H_qs,I_A_o,I_A_o_se, I_B_o,I_B_o_se = final_state
     #print(info_gain)
     #print(predicted_KLD)
     """print(predicted_F)
@@ -1688,7 +1696,7 @@ def compute_G_policy_inductive_efe_curiosity(qs_init, A, B, C, pA, pB, A_depende
     #print(f"I_B_o:",I_B_o)
     #print(f"I_B_o_se:",I_B_o_se)
     #print(neg_G)
-    return neg_G, info_gain, info_gain_st,predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB, I_B_o, H_qs
+    return neg_G, info_gain, info_gain_st,predicted_KLD, predicted_F, oRisk, param_info_gainA, param_info_gainB,I_A_o, I_B_o, H_qs
 
 
 def compute_s_entropy(qs, B):
@@ -1718,3 +1726,239 @@ def compute_s_entropy_list(qs, B):
     s_entropy_per_factor = jtu.tree_map(compute_s_entropy_for_factor, qs, list(range(len(B))))
         
     return s_entropy_per_factor
+
+
+def calc_pA_o_mutual_info_gain(
+    pA,
+    qs_t,
+    qo,
+    A_dependencies,
+    rng_key=None,
+    nsamples: int = 8192,
+    chunk_size: int = 512,
+    remat_inner: bool = False,
+):
+    """
+    Compute mutual information between observation outcomes o and Dirichlet parameters pA:
+        I(A; o | pi) = H[q(o|pi)] - E_{q(A)}[ H(q(o|A,pi)) ]
+
+    Parameters
+    ----------
+    pA : Array(dtype=object) or pytree of Arrays
+        Dirichlet concentration parameters over observation model A
+        Each modality m typically has shape (O_m, S_dep1, S_dep2, ..., S_depk)
+        where deps = A_dependencies[m].
+    qs_t : list[Array]
+        Predictive posterior beliefs over hidden states at time t under policy pi
+    qo : list[Array]
+        Predictive observation distribution q(o|pi) computed analytically (e.g., using E[A])
+    A_dependencies : list[list[int] or tuple[int]]
+        deps for each modality: which state factors each A_m depends on.
+    rng_key : jax.random.PRNGKey
+    nsamples : int
+        MC sample count
+    chunk_size : int
+        Chunk size for vmap evaluation (memory control)
+    remat_inner : bool
+        If True, rematerialize inner one-sample function to save memory (slower)
+
+    Returns
+    -------
+    I_pi_est : jnp.ndarray scalar
+        Monte Carlo estimate of mutual information
+    I_pi_se : jnp.ndarray scalar
+        Standard error of the Monte Carlo estimate term E[H(q(o|A))]
+    """
+
+    from typing import Sequence, NamedTuple
+    import jax.numpy as jnp
+    from jax import random, vmap, lax, jit, tree_util as jtu
+
+    # ---------
+    # Sampling A from Dirichlet parameters pA
+    # ---------
+    def _sample_A_modality_all_columns(key, alpha_m, eps: float = 1e-12):
+        """
+        alpha_m shape assumed:
+          (O, rest...) where axis0 is Dirichlet dimension (outcomes),
+          all remaining axes are independent Dirichlet draws ("columns").
+        Returns sample A_m with same shape.
+        """
+        alpha_m = jnp.asarray(alpha_m, dtype=jnp.float32)
+
+        if alpha_m.ndim == 1:
+            # single Dirichlet vector (O,)
+            alpha = jnp.clip(alpha_m, eps, jnp.inf)
+            A_vec = random.dirichlet(key, alpha)
+            return A_vec, key
+
+        if alpha_m.ndim < 2:
+            raise ValueError("alpha_m must have ndim >= 2 (outcome dim + at least one column dim).")
+
+        O = alpha_m.shape[0]
+        rest_shape = alpha_m.shape[1:]
+        n_cols = 1
+        for d in rest_shape:
+            n_cols *= d  # Python int OK for reshape sizes
+
+        alpha = jnp.clip(alpha_m, eps, jnp.inf)
+        alpha_2d = alpha.reshape(O, n_cols)          # (O, n_cols)
+        cols = jnp.transpose(alpha_2d, (1, 0))       # (n_cols, O)
+
+        keys = random.split(key, n_cols + 1)
+        subkeys, key_out = keys[:-1], keys[-1]
+
+        samples = vmap(lambda k, a: random.dirichlet(k, a))(subkeys, cols)  # (n_cols, O)
+        samples_2d = jnp.transpose(samples, (1, 0))                         # (O, n_cols)
+        A_m = samples_2d.reshape((O, *rest_shape))                           # (O, rest...)
+
+        return A_m, key_out
+
+    def sample_A_from_pA_tree(key, pA: Sequence[jnp.ndarray], eps: float = 1e-12):
+        """
+        pA: pytree/list of modality-wise Dirichlet concentration arrays
+        Returns A_list with the same pytree structure.
+        """
+        # number of modalities
+        M = len(pA)
+        keys = random.split(key, M + 1)
+        key_mods, key_out = keys[:-1], keys[-1]
+
+        def _per_mod(alpha_m, km):
+            A_m, _ = _sample_A_modality_all_columns(km, alpha_m, eps=eps)
+            return A_m
+
+        A_list = jtu.tree_map(_per_mod, list(pA), list(key_mods))
+        return A_list, key_out
+
+    # ---------
+    # expected obs given sampled A and qs_t
+    # ---------
+    def compute_expected_obs_for_mc(qs, A, A_dependencies):
+        def compute_expected_obs_modality(A_m, m):
+            deps = A_dependencies[m]
+            relevant_factors = [qs[idx] for idx in deps]
+            return factor_dot(A_m, relevant_factors, keep_dims=(0,))
+        return jtu.tree_map(compute_expected_obs_modality, A, list(range(len(A))))
+
+    def compute_entropy_for_modality(qo_m):
+        return stable_entropy(qo_m)
+
+    # ---------
+    # chunked MC: estimate E_A[ H(q(o|A,pi)) ]
+    # ---------
+    class _AggState(NamedTuple):
+        n: jnp.ndarray
+        mean: jnp.ndarray
+        M2: jnp.ndarray
+
+    # 固定（jit用）：deps を静的 tuple 化
+    Adeps_static = tuple(tuple(int(i) for i in deps) for deps in A_dependencies)
+
+    if rng_key is None:
+        rng_key = random.PRNGKey(0)
+
+    def mc_E_H_qo_given_A_pi_chunked(
+        rng_key,
+        pA,
+        qs_t,
+        A_dependencies,
+        nsamples: int,
+        chunk_size: int,
+        remat_inner: bool,
+    ):
+        def one_H_given_A(key):
+            A_samp, _ = sample_A_from_pA_tree(key, pA)
+            qo_temp = compute_expected_obs_for_mc(qs_t, A_samp, A_dependencies)
+            H_per_mod = jtu.tree_map(compute_entropy_for_modality, qo_temp)
+            return jtu.tree_reduce(lambda x, y: x + y, H_per_mod)  # scalar
+
+        if remat_inner:
+            from jax import checkpoint
+            one_H_given_A = checkpoint(one_H_given_A)
+
+        vmapped_H = vmap(one_H_given_A, in_axes=0, out_axes=0)
+
+        num_chunks = (nsamples + chunk_size - 1) // chunk_size
+
+        def combine(state: _AggState, batch_mean, batch_M2, batch_n):
+            n1, m1, M2_1 = state.n, state.mean, state.M2
+            n2, m2, M2_2 = batch_n, batch_mean, batch_M2
+
+            n_tot = n1 + n2
+            w = jnp.where(n_tot > 0, n2 / jnp.maximum(n_tot, 1.0), 0.0)
+            delta = m2 - m1
+            m_tot = m1 + w * delta
+            M2_tot = M2_1 + M2_2 + jnp.where(
+                (n1 > 0) & (n2 > 0),
+                (delta * delta) * (n1 * n2 / jnp.maximum(n_tot, 1.0)),
+                0.0
+            )
+            return _AggState(n_tot, m_tot, M2_tot)
+
+        def body_fun(i, state: _AggState):
+            base = random.fold_in(rng_key, i)
+            keys = random.split(base, chunk_size)
+
+            H_batch = vmapped_H(keys)
+
+            start = i * chunk_size
+            remain = nsamples - start
+            m = jnp.clip(remain, 0, chunk_size)
+            mask = (jnp.arange(chunk_size) < m).astype(H_batch.dtype)
+
+            batch_n = jnp.sum(mask)
+
+            def nonempty():
+                s1 = jnp.sum(H_batch * mask)
+                mean = s1 / jnp.maximum(batch_n, 1.0)
+                M2 = jnp.sum(((H_batch - mean) ** 2) * mask)
+                return mean, M2, batch_n
+
+            def empty():
+                z = jnp.array(0.0, dtype=H_batch.dtype)
+                return z, z, jnp.array(0.0, dtype=H_batch.dtype)
+
+            batch_mean, batch_M2, batch_n = lax.cond(batch_n > 0, nonempty, empty)
+            return combine(state, batch_mean, batch_M2, batch_n)
+
+        init = _AggState(
+            n=jnp.array(0.0, dtype=jnp.float32),
+            mean=jnp.array(0.0, dtype=jnp.float32),
+            M2=jnp.array(0.0, dtype=jnp.float32),
+        )
+
+        final = lax.fori_loop(0, num_chunks, body_fun, init)
+
+        mean_H = final.mean
+        se_H = jnp.where(final.n > 1.0,
+                         jnp.sqrt((final.M2 / (final.n - 1.0)) / final.n),
+                         jnp.array(jnp.nan, dtype=final.mean.dtype))
+        return mean_H, se_H, rng_key
+
+    mc_fn_jit = jit(
+        mc_E_H_qo_given_A_pi_chunked,
+        static_argnames=('A_dependencies', 'nsamples', 'chunk_size', 'remat_inner'),
+        donate_argnums=(0,)
+    )
+
+    # 1) MC estimate: E_A[ H(q(o|A,pi)) ]
+    mean_H_v, se_H_v, rng_key = mc_fn_jit(
+        rng_key,
+        pA,
+        qs_t,
+        Adeps_static,         # static
+        nsamples=nsamples,
+        chunk_size=chunk_size,
+        remat_inner=remat_inner,
+    )
+
+    # 2) Analytic H(q(o|pi)) (given)
+    Hqo_per_modality = jtu.tree_map(compute_entropy_for_modality, qo)
+    Hqo = jtu.tree_reduce(lambda x, y: x + y, Hqo_per_modality)
+
+    # 3) Mutual information estimate + SE
+    I_pi_est = Hqo - mean_H_v
+    I_pi_se  = se_H_v
+
+    return I_pi_est, I_pi_se
